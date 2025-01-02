@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "build_helper"
+backend-path = ["."]
+
+[project]
+name = "zeus"
+version = "0.0.1"
+description = "Super fast distributed attention solver"
+authors = [{name = "littsk", email = "zeweitao630@gmail.com"}, {name = "Strivin", email = "hyp@smail.nju.edu.cn"}]
+license = {text = "Apache-2.0"}
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/littsk/zeus"
+"Bug Tracker" = "https://github.com/littsk/zeus/issues"
+
+[tool.setuptools]
+packages = ["zeus"]
+
+[tool.setuptools_scm]
+write_to = "zeus/version.py"

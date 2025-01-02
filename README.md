@@ -1,2 +1,1 @@
-# zeus
-* A super fast distributed attention implementation
+# Zeus(A super fast distributed attention solver)
