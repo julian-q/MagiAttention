@@ -23,7 +23,8 @@ test:
 clean:
 	rm -rf __pycache__
 	rm -rf tests/__pycache__
-	rm -rf src/zeus/__pycache__
+	rm -rf zeus/__pycache__
+	rm -rf zeus/version.py
 	rm -rf build
 	rm -rf dist
 	rm -rf zeus.egg-info
