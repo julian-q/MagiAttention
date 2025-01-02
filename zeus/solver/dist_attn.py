@@ -62,6 +62,7 @@ class AttnCalcMeta:
     max_seqlen_k_list: list[int]
 
 
+# HACK(xiaowu): mock数据以通过mypy
 @dataclass
 class DispatchMeta:
     num_remote_token: int
