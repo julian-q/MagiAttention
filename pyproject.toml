@@ -26,3 +26,6 @@ packages = ["zeus"]
 
 [tool.setuptools_scm]
 write_to = "zeus/version.py"
+
+[tool.isort]
+profile = "black"
