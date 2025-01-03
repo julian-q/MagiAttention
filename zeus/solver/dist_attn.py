@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 import torch
@@ -7,31 +7,7 @@ import torch.nn.functional as F
 from flash_attn_interface import flex_flash_attn_func
 from torch.distributed import Work
 
-
-def multi_cast_collective(
-    input: torch.Tensor,
-    output: torch.Tensor,
-    input_split_size: list[int],
-    output_split_size: list[int],
-    dst_indices: list[list[int]],
-    src_indices: list[list[int]],
-    group: Optional[dist.ProcessGroup] = None,
-) -> Work:
-    """
-    Args:
-        input: [sum(input_split_size), ...]
-        output: [sum(output_split_size), ...]
-        input_split_size: [N]
-        output_split_size: [M]
-        dst_indices: [N, ?]
-        src_indices: [M, ?]
-
-    NOTE(xiaowu): 使用a2a-v实现
-    """
-    assert len(input_split_size) == len(dst_indices)
-    assert len(output_split_size) == len(src_indices)
-
-    pass
+from ..comm.primitive import multi_cast_collective
 
 
 @dataclass
@@ -52,7 +28,7 @@ class DistFlashAttnConfig:
 @dataclass
 class AttnArg:
     q_ranges: torch.Tensor
-    kv_ranges: torch.Tensor
+    k_ranges: torch.Tensor
     is_causal_mapping: torch.Tensor
     max_seqlen_q: int
     max_seqlen_k: int
@@ -65,15 +41,22 @@ class AttnCalcMeta:
     remote_attn_args_list: list[AttnArg]
 
 
+@dataclass
+class MultiCastCollectiveArg:
+    input_split_size_list: list[int]
+    output_split_size_list: list[int]
+    dst_indices_list: list[list[int]]
+    src_index_list: list[int]
+
+
 # HACK(xiaowu): mock数据以通过mypy
 @dataclass
 class DispatchMeta:
-    num_remote_token: int
-    split_size: int
-    input_split_size_list: list[list[int]]
-    output_split_size_list: list[list[int]]
-    dst_indices_list: list[list[list[int]]]
-    src_indices_list: list[list[list[int]]]
+    num_remote_tokens: int
+    split_size_list: list[int] = field(
+        metadata={"help": "num tokens per overlap stage"}
+    )
+    multi_cast_collective_args_list: list[MultiCastCollectiveArg]
 
 
 @dataclass
@@ -87,6 +70,7 @@ class DistFlashAttnRuntimeMeta:
         kv_dispatch_meta (DispatchMeta): key/value张量的分发相关元数据
     """
 
+    context_parallel_group: dist.ProcessGroup
     attn_calc_meta: AttnCalcMeta
     q_dispatch_meta: DispatchMeta
     kv_dispatch_meta: DispatchMeta
@@ -123,7 +107,7 @@ class DistFlashAttnRuntime:
         # 申请远程kv buffer
         self.remote_k_buffer = torch.empty(
             [
-                runtime_meta.kv_dispatch_meta.num_remote_token,
+                runtime_meta.kv_dispatch_meta.num_remote_tokens,
                 config.num_heads,
                 config.head_dim,
             ],
@@ -132,7 +116,7 @@ class DistFlashAttnRuntime:
         )
         self.remote_v_buffer = torch.empty(
             [
-                runtime_meta.kv_dispatch_meta.num_remote_token,
+                runtime_meta.kv_dispatch_meta.num_remote_tokens,
                 config.num_heads,
                 config.head_dim,
             ],
@@ -141,10 +125,14 @@ class DistFlashAttnRuntime:
         )
 
         self.remote_k_buffer_list = torch.split(
-            self.remote_k_buffer, self.runtime_meta.kv_dispatch_meta.split_size, dim=0
+            self.remote_k_buffer,
+            self.runtime_meta.kv_dispatch_meta.split_size_list,
+            dim=0,
         )
         self.remote_v_buffer_list = torch.split(
-            self.remote_v_buffer, self.runtime_meta.kv_dispatch_meta.split_size, dim=0
+            self.remote_v_buffer,
+            self.runtime_meta.kv_dispatch_meta.split_size_list,
+            dim=0,
         )
 
     def fetch_remote_kv(
@@ -174,35 +162,25 @@ class DistFlashAttnRuntime:
         remote_k_work = multi_cast_collective(
             input=k,
             output=self.remote_k_buffer,
-            input_split_size=self.runtime_meta.kv_dispatch_meta.input_split_size_list[
-                overlap_stage
-            ],
-            output_split_size=self.runtime_meta.kv_dispatch_meta.output_split_size_list[
-                overlap_stage
-            ],
-            dst_indices=self.runtime_meta.kv_dispatch_meta.dst_indices_list[
-                overlap_stage
-            ],
-            src_indices=self.runtime_meta.kv_dispatch_meta.src_indices_list[
-                overlap_stage
-            ],
+            **asdict(
+                self.runtime_meta.kv_dispatch_meta.multi_cast_collective_args_list[
+                    overlap_stage
+                ]
+            ),
+            group=self.runtime_meta.context_parallel_group,
+            async_op=True,
         )
 
         remote_v_work = multi_cast_collective(
             input=v,
             output=self.remote_v_buffer,
-            input_split_size=self.runtime_meta.kv_dispatch_meta.input_split_size_list[
-                overlap_stage
-            ],
-            output_split_size=self.runtime_meta.kv_dispatch_meta.output_split_size_list[
-                overlap_stage
-            ],
-            dst_indices=self.runtime_meta.kv_dispatch_meta.dst_indices_list[
-                overlap_stage
-            ],
-            src_indices=self.runtime_meta.kv_dispatch_meta.src_indices_list[
-                overlap_stage
-            ],
+            **asdict(
+                self.runtime_meta.kv_dispatch_meta.multi_cast_collective_args_list[
+                    overlap_stage
+                ]
+            ),
+            group=self.runtime_meta.context_parallel_group,
+            async_op=True,
         )
 
         return (
