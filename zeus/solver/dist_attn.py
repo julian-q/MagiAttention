@@ -258,20 +258,19 @@ class DistFlashAttnRuntime:
             - lse: [num_heads, num_tokens_q]
         """
         # 当overlap_degree为1时, 也至少有2个lse和out, 一个是local的, 一个是remote的
-        assert len(out_list) == len(lse_list)
-        assert len(out_list) == self.config.overlap_degree + 1
+        assert len(out_list) == len(lse_list) == self.config.overlap_degree + 1
 
         curr_lse = self.correct_attn_lse(lse_list[0], lse_list[1])
         curr_out = self.correct_attn_output(
             out_list[0], lse_list[0], out_list[1], lse_list[1], curr_lse
         )
 
-        for i in range(self.config.overlap_degree):
+        for i in range(2, len(lse_list)):
             original_lse = curr_lse
             original_out = curr_out
-            curr_lse = self.correct_attn_lse(original_lse, lse_list[i + 1])
+            curr_lse = self.correct_attn_lse(original_lse, lse_list[i])
             curr_out = self.correct_attn_output(
-                original_out, original_lse, out_list[i + 1], lse_list[i + 1], curr_lse
+                original_out, original_lse, out_list[i], lse_list[i], curr_lse
             )
 
         return curr_out, curr_lse
