@@ -17,7 +17,7 @@ from zeus.solver.dist_attn import (
     DistFlashAttnConfig,
     DistFlashAttnRuntime,
     DistFlashAttnRuntimeMeta,
-    MultiCastCollectiveArg,
+    GroupCastCollectiveArg,
 )
 from zeus.testing.dist_common import DistTestBase, with_comms
 
@@ -30,6 +30,10 @@ class TestDistFlashAttn(DistTestBase):
     @property
     def world_size(self) -> int:
         return 4
+
+    @property
+    def seed(self) -> int:
+        return 42
 
     @skip_if_lt_x_gpu(4)
     @with_comms
@@ -68,13 +72,14 @@ class TestDistFlashAttn(DistTestBase):
                     max_seqlen_k=128 * 3,
                 ),
             ],
+            deterministic=False,
         )
 
         q_dispatch_meta = DispatchMeta(
             num_remote_tokens=128 * 3,
             split_size_list=[128 * 3],
-            multi_cast_collective_args_list=[
-                MultiCastCollectiveArg(
+            group_cast_collective_args_list=[
+                GroupCastCollectiveArg(
                     input_split_size_list=[128],
                     output_split_size_list=[128, 128, 128],
                     dst_indices_list=[
@@ -101,12 +106,27 @@ class TestDistFlashAttn(DistTestBase):
             config=attn_config,
         )
 
-        local_q = torch.randn(128, 1, 128, device=device, dtype=attn_config.dtype)
-        local_k = torch.randn(128, 1, 128, device=device, dtype=attn_config.dtype)
-        local_v = torch.randn(128, 1, 128, device=device, dtype=attn_config.dtype)
+        local_q = torch.randn(
+            128, 1, 128, device=device, dtype=attn_config.dtype, requires_grad=True
+        )
+        local_k = torch.randn(
+            128, 1, 128, device=device, dtype=attn_config.dtype, requires_grad=True
+        )
+        local_v = torch.randn(
+            128, 1, 128, device=device, dtype=attn_config.dtype, requires_grad=True
+        )
 
         local_out = dist_attn(local_q, local_k, local_v, dist_attn_runtime)
         total_out = torch.cat(all_gather(local_out, group=self.process_group), dim=0)
+
+        grad_total_out = torch.randn_like(total_out)
+        total_out.backward(grad_total_out)
+        local_grad_q, local_grad_k, local_grad_v = (
+            local_q.grad,
+            local_k.grad,
+            local_v.grad,
+        )
+        local_q.grad, local_k.grad, local_v.grad = None, None, None
 
         total_q = torch.cat(all_gather(local_q, group=self.process_group), dim=0)
         total_k = torch.cat(all_gather(local_k, group=self.process_group), dim=0)
@@ -121,8 +141,18 @@ class TestDistFlashAttn(DistTestBase):
             is_causal=False,
         )
         total_out_ref = rearrange(total_out_ref, "1 h t d -> t h d")
+        total_out_ref.backward(grad_total_out)
+        local_grad_q_ref, local_grad_k_ref, local_grad_v_ref = (
+            local_q.grad,
+            local_k.grad,
+            local_v.grad,
+        )
+        local_q.grad, local_k.grad, local_v.grad = None, None, None
 
         torch.testing.assert_close(total_out, total_out_ref, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(local_grad_q, local_grad_q_ref, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(local_grad_k, local_grad_k_ref, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(local_grad_v, local_grad_v_ref, atol=1e-2, rtol=1e-2)
 
 
 if __name__ == "__main__":

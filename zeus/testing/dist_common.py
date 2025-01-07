@@ -56,9 +56,15 @@ class DistTestBase(MultiProcessTestCase):
         dist.barrier()
         dist.destroy_process_group()
 
+    def set_random_seed(self) -> None:
+        seed = self.seed + self.rank
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+
     def setUp(self) -> None:
         super().setUp()
         self._spawn_processes()
+        self.set_random_seed()
 
 
 TestFunc = Callable[..., Any]
