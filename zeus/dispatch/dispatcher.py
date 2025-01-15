@@ -21,7 +21,7 @@ from ..common.ranges import (
     find_overlap_ranges,
     find_overlap_ranges_new,
 )
-from ..meta.containers.bucket import AttnBucket, AttnChunk, AttnSlice
+from ..meta.container.bucket import AttnBucket, AttnChunk, AttnSlice
 from ..utils import (
     cu_seqlens2seqlens,
     flatten_nested_list,

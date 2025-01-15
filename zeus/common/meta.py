@@ -5,7 +5,7 @@ from typing import List
 import torch.distributed as dist
 
 from ..dispatch.kv_transfer import KVTransferTable  # 不应该导入KVTransferTable
-from ..meta.containers.bucket import AttnBucket
+from ..meta.container.bucket import AttnBucket
 from .enum import AttnMaskType, AttnRole, AttnType
 from .ranges import AttnRanges
 

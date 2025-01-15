@@ -4,7 +4,7 @@ from ..common.enum import AttnMaskType
 from ..common.mask import AttnMask
 from ..common.range import AttnRange
 from ..common.ranges import AttnRanges
-from ..meta.containers.bucket import AttnBucket, AttnChunk, AttnSlice
+from ..meta.container.bucket import AttnBucket, AttnChunk, AttnSlice
 from .dispatcher import SequenceDispatcher
 from .solver import DispatchAlgorithm
 
