@@ -2,8 +2,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
-from .enum import AttnMaskType
-from .ranges import (
+from ...common.enum import AttnMaskType
+from ...common.ranges import (
     AttnRange,
     AttnRanges,
     NaiveRanges,

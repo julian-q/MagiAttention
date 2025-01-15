@@ -1,6 +1,6 @@
 import torch.distributed as dist
 
-from ..common.ranges import AttnRanges
+from zeus.common.ranges import AttnRanges
 
 
 def calc_dispatch_meta_from_qk_ranges(

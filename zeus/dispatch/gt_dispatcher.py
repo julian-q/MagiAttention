@@ -1,10 +1,10 @@
 from typing import List
 
-from ..common.bucket import AttnBucket, AttnChunk, AttnSlice
 from ..common.enum import AttnMaskType
 from ..common.mask import AttnMask
 from ..common.range import AttnRange
 from ..common.ranges import AttnRanges
+from ..meta.container.bucket import AttnBucket, AttnChunk, AttnSlice
 from .dispatcher import SequenceDispatcher
 from .solver import DispatchAlgorithm
 
