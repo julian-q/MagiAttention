@@ -7,7 +7,7 @@ from zeus.utils import nvtx
 
 
 @nvtx.instrument_nvtx
-def dispatch(
+def dispatch_func(
     x_global: torch.Tensor,
     meta: DispatchMeta,
     seq_dim: int = 0,
@@ -47,7 +47,7 @@ def dispatch(
 
 
 @nvtx.instrument_nvtx
-def undispatch(
+def undispatch_func(
     x_local: torch.Tensor,
     meta: DispatchMeta,
     seq_dim: int = 0,

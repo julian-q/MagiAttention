@@ -75,7 +75,7 @@ class DispatchMeta:
     remote_attn_args_max_seqlen_q_list: List[int]
     remote_attn_args_max_seqlen_k_list: List[int]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert len(self.kv_input_split_size_list) == len(
             self.kv_dst_indices_list
         ), f"The {len(self.kv_input_split_size_list)=} should be equal to {len(self.kv_dst_indices_list)=}."  # noqa

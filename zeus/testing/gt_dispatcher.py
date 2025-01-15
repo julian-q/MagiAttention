@@ -6,7 +6,7 @@ from zeus.common.enum import AttnMaskType
 from zeus.common.mask import AttnMask
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
-from zeus.meta.container.bucket import AttnBucket, AttnChunk, AttnSlice
+from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
 from zeus.meta.solver import DispatchAlgorithm
 
 
