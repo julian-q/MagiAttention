@@ -6,8 +6,8 @@ from zeus.common.enum import AttnMaskType
 from zeus.common.mask import AttnMask
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
-from zeus.dispatch import GroundTruthDispatcher
 from zeus.testing.dist_common import DistTestBase
+from zeus.testing.gt_dispatcher import GroundTruthDispatcher
 
 WORLD_SIZE = 4
 SEED = 42

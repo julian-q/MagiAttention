@@ -1,15 +1,16 @@
 from typing import List
 
-from ..common.enum import AttnMaskType
-from ..common.mask import AttnMask
-from ..common.range import AttnRange
-from ..common.ranges import AttnRanges
-from ..meta.container.bucket import AttnBucket, AttnChunk, AttnSlice
-from .dispatcher import SequenceDispatcher
-from .solver import DispatchAlgorithm
+import torch.nn as nn
+
+from zeus.common.enum import AttnMaskType
+from zeus.common.mask import AttnMask
+from zeus.common.range import AttnRange
+from zeus.common.ranges import AttnRanges
+from zeus.meta.container.bucket import AttnBucket, AttnChunk, AttnSlice
+from zeus.meta.solver import DispatchAlgorithm
 
 
-class GroundTruthDispatcher(SequenceDispatcher):
+class GroundTruthDispatcher(nn.Module):
     """Balance dispatching tokens towards each cp rank along the sequence dimension for distributed attention
     where the "balance" has several folds of meaning:
         1. The number of tokens in each cp rank should be exactly balanced, i.e. equal to each other
