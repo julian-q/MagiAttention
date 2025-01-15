@@ -20,6 +20,10 @@ if torch.cuda.is_available() and torch.cuda.device_count() > 1:
 
 class DistTestBase(MultiProcessTestCase):
     @property
+    def seed(self) -> int:
+        return 42
+
+    @property
     def world_size(self) -> int:
         return NUM_DEVICES
 
@@ -56,7 +60,7 @@ class DistTestBase(MultiProcessTestCase):
         dist.barrier()
         dist.destroy_process_group()
 
-    def set_random_seed(self) -> None:
+    def _set_random_seed(self) -> None:
         seed = self.seed + self.rank
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
@@ -64,7 +68,7 @@ class DistTestBase(MultiProcessTestCase):
     def setUp(self) -> None:
         super().setUp()
         self._spawn_processes()
-        self.set_random_seed()
+        self._set_random_seed()
 
 
 TestFunc = Callable[..., Any]

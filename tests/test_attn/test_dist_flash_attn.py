@@ -9,7 +9,7 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.solver.dist_attn import (
+from zeus.functional.dist_attn import (
     AttnArg,
     AttnCalcMeta,
     DispatchMeta,
