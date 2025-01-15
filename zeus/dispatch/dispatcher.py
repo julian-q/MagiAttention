@@ -10,7 +10,6 @@ import torch.nn as nn
 from zeus.comm.functional import all_gather_v_func
 from zeus.utils import nvtx
 
-from ..common.bucket import AttnBucket, AttnChunk, AttnSlice
 from ..common.enum import AttnMaskType, AttnRole, AttnType
 from ..common.meta import DispatchMeta
 from ..common.ranges import (
@@ -22,6 +21,7 @@ from ..common.ranges import (
     find_overlap_ranges,
     find_overlap_ranges_new,
 )
+from ..meta.containers.bucket import AttnBucket, AttnChunk, AttnSlice
 from ..utils import (
     cu_seqlens2seqlens,
     flatten_nested_list,
