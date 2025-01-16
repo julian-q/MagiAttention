@@ -2,7 +2,6 @@
 from dataclasses import dataclass, field
 from typing import List
 
-from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
 
 from .chunk import AttnChunk
@@ -16,32 +15,17 @@ class AttnBucket:
 
     @property
     def q_ranges(self) -> AttnRanges:
-        q_ranges = AttnRanges(as_cu_seqlens=False)
+        q_ranges = AttnRanges()
         for chunk in self.q_chunks:
             q_ranges.extend(chunk.q_ranges, check=False)
         return q_ranges
 
     @property
     def k_ranges(self) -> AttnRanges:
-        k_ranges = AttnRanges(as_cu_seqlens=False)
+        k_ranges = AttnRanges()
         for chunk in self.q_chunks:
             k_ranges.extend(chunk.k_ranges, check=False)
         return k_ranges
-
-    @property
-    def remote_k_ranges(self) -> AttnRanges:
-        remote_k_ranges = AttnRanges(as_cu_seqlens=False)
-
-        q_ranges = self.q_ranges
-        k_ranges = self.k_ranges
-        hole_ranges = k_ranges.find_hole_ranges(
-            overlap_range=q_ranges,
-        )
-
-        for range in hole_ranges:
-            remote_k_ranges.append(AttnRange.from_range(range), check=False)
-
-        return remote_k_ranges
 
     @property
     def area(self) -> int:

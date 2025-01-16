@@ -14,14 +14,14 @@ class AttnChunk:
 
     @property
     def q_ranges(self) -> AttnRanges:
-        q_ranges = AttnRanges(as_cu_seqlens=False)
+        q_ranges = AttnRanges()
         for slice in self.q_slices:
             q_ranges.append(slice.q_range, check=False)
         return q_ranges
 
     @property
     def k_ranges(self) -> AttnRanges:
-        k_ranges = AttnRanges(as_cu_seqlens=False)
+        k_ranges = AttnRanges()
         for slice in self.q_slices:
             k_ranges.append(slice.k_range, check=False)
         return k_ranges

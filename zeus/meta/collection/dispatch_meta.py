@@ -46,9 +46,27 @@ class DispatchMeta:
 
     global_bucket: AttnBucket
     buckets_per_rank: List[AttnBucket]
+    host_ranges_per_rank: List[AttnRanges]
 
     def __post_init__(self) -> None:
-        pass
+        assert len(self.seqlens) == len(self.seqlens_permed) == self.batch_size
+        assert (
+            len(self.seqlens_perm_idxs)
+            == len(self.seqlens_unperm_idxs)
+            == self.batch_size
+        )
+        assert (
+            len(self.cu_seqlens) == len(self.cu_seqlens_permed) == self.batch_size + 1
+        )
+
+        assert len(self.partitions) == self.cp_size
+        assert (
+            len(self.partitions_perm_idxs)
+            == len(self.partitions_unperm_idxs)
+            == self.cp_size
+        )
+        assert len(self.buckets_per_rank) == self.cp_size
+        assert len(self.host_ranges_per_rank) == self.cp_size
 
     def __repr__(self, width: int = 30) -> str:
         """Customized __repr__ method for BaseConfig,

@@ -274,6 +274,12 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         for rank, partition in enumerate(partitions)
     ]
 
+    # --------------      construct host ranges per rank       -------------- #
+
+    host_ranges_per_rank: list[AttnRanges] = [
+        bucket.q_ranges for bucket in buckets_per_rank
+    ]
+
     # --------------      construct meta q and meta k       -------------- #
 
     common_meta_kwargs = dict(
@@ -299,6 +305,7 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         partitions_unperm_idxs=partitions_unperm_idxs,
         global_bucket=global_bucket,
         buckets_per_rank=buckets_per_rank,
+        host_ranges_per_rank=host_ranges_per_rank,
     )
 
     meta_q = DispatchMeta(
