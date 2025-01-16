@@ -122,8 +122,11 @@ class AttnRanges:
 
     @nvtx.instrument_nvtx
     def sort(self, reverse: bool = False) -> "AttnRanges":
-        """Sort the attn_ranges by 'attn_range.start' in ascending order if 'reverse=False', \
+        """
+        Sort the attn_ranges by 'attn_range.start' in ascending order if 'reverse=False', \
         otherwise in descending order
+
+        NOTE: python的sort是稳定的, 因此当start相同时, 会保持原来的顺序
         """
         return AttnRanges.from_ranges(
             sorted(
@@ -162,14 +165,16 @@ class AttnRanges:
         return True
 
     def is_merged(self) -> bool:
-        sorted_ranges = self.sort()
-        if not all(
-            sorted_ranges._ranges[i - 1].end < sorted_ranges._ranges[i].start
-            for i in range(1, len(sorted_ranges._ranges))
-        ):
-            return False
+        if self.is_sorted():
+            if not all(
+                self._ranges[i - 1].end < self._ranges[i].start
+                for i in range(1, len(self._ranges))
+            ):
+                return False
+            else:
+                return True
         else:
-            return True
+            return False
 
     def is_cu_seqlens(self, seqlen: int) -> bool:
         if not self._ranges[0].start == 0:
