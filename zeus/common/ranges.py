@@ -297,10 +297,10 @@ class AttnRanges:
 
     def find_hole_ranges(
         self,
-        other: "AttnRanges",
+        other_attn_ranges: "AttnRanges",
     ) -> "AttnRanges":
         ranges1 = self.merge()
-        ranges2 = other.merge()
+        ranges2 = other_attn_ranges.merge()
 
         p1 = 0
         p2 = 0
@@ -338,10 +338,10 @@ class AttnRanges:
 
     def find_overlap_ranges(
         self: "AttnRanges",
-        other: "AttnRanges",
+        other_attn_ranges: "AttnRanges",
     ) -> "AttnRanges":
         ranges1 = self.merge()
-        ranges2 = other.merge()
+        ranges2 = other_attn_ranges.merge()
 
         p1 = 0
         p2 = 0
