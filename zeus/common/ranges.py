@@ -158,7 +158,7 @@ class AttnRanges:
     def is_merged(self) -> bool:
         sorted_ranges = self.sort()
         if not all(
-            sorted_ranges._ranges[i - 1].end <= sorted_ranges._ranges[i].start
+            sorted_ranges._ranges[i - 1].end < sorted_ranges._ranges[i].start
             for i in range(1, len(sorted_ranges._ranges))
         ):
             return False
@@ -177,6 +177,12 @@ class AttnRanges:
             return False
 
         return True
+
+    def to_cu_seqlens(self, seq_len: int) -> List[int]:
+        assert self.is_cu_seqlens(
+            seq_len
+        ), "The ranges can not be converted to cu_seqlens"
+        return [0] + [range.end for range in self._ranges]
 
     # 高级方法(make_range_local, make_ranges_local, to_local_ranges, find_hole_ranges, find_overlap_ranges)
     # NOTE: 这些高级方法都是为了能够更方便实现各种ranges的映射
