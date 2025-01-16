@@ -110,7 +110,7 @@ class AttnRange:
     def check_valid(self, start: int | None = None, end: int | None = None) -> None:
         if not self.is_valid(start, end):
             raise RangeError(
-                f"The range {(start, end)} is invalid against the rule: '0 <= start <= end'"
+                f"The attn_range {(start, end)} is invalid against the rule: '0 <= start <= end'"
             )
 
     def __len__(self) -> int:
