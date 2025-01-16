@@ -191,6 +191,36 @@ class TestFindHoleRanges(TestCase):
             overlap_ranges = ranges1.find_overlap_ranges(ranges2)
             self.assertEqual(overlap_ranges, AttnRanges.from_ranges(ans_list))
 
+    def test_from_cu_seqlens(self):
+        cu_seqlens = [0, 10, 20, 30, 40, 50]
+        seq_len = 50
+        ranges = AttnRanges.from_cu_seqlens(cu_seqlens, seq_len)
+        self.assertEqual(
+            ranges,
+            AttnRanges.from_ranges([(0, 10), (10, 20), (20, 30), (30, 40), (40, 50)]),
+        )
+
+    def test_sort(self):
+        ranges = AttnRanges.from_ranges(
+            [(0, 10), (30, 35), (20, 30), (10, 25), (40, 50)]
+        )
+        self.assertFalse(ranges.is_sorted())
+        sorted_ranges = ranges.sort()
+        self.assertEqual(
+            sorted_ranges,
+            AttnRanges.from_ranges([(0, 10), (10, 25), (20, 30), (30, 35), (40, 50)]),
+        )
+        self.assertTrue(sorted_ranges.is_sorted())
+
+    def test_merge(self):
+        ranges = AttnRanges.from_ranges(
+            [(0, 10), (10, 20), (20, 30), (30, 35), (40, 50)]
+        )
+        self.assertFalse(ranges.is_merged())
+        merged_ranges = ranges.merge()
+        self.assertEqual(merged_ranges, AttnRanges.from_ranges([(0, 35), (40, 50)]))
+        self.assertTrue(merged_ranges.is_merged())
+
 
 if __name__ == "__main__":
     unittest.main()

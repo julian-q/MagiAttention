@@ -48,13 +48,13 @@ class AttnRange:
 
     @staticmethod
     def from_range(
-        r: Union[NaiveRange, "AttnRange"],
+        attn_range: Union[NaiveRange, "AttnRange"],
         check: bool = True,
     ) -> "AttnRange":
-        if isinstance(r, AttnRange):  # just copy
-            res = r
+        if isinstance(attn_range, AttnRange):  # just copy
+            res = attn_range
         else:
-            res = AttnRange(start=r[0], end=r[1])
+            res = AttnRange(start=attn_range[0], end=attn_range[1])
 
         if check:
             res.check_valid()

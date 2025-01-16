@@ -1,7 +1,6 @@
 # mypy: ignore-errors
 from typing import Any, Iterator, List, Optional, Sequence, Tuple, TypeAlias, Union
 
-import numpy as np
 import torch
 
 from zeus.utils import nvtx
@@ -54,7 +53,7 @@ class AttnRanges:
         if self.is_empty():  # empty ranges are always valid
             return True
 
-        if not all(r.is_valid() for r in self._ranges):
+        if not all(attn_range.is_valid() for attn_range in self._ranges):
             return False
 
         return True
@@ -68,21 +67,21 @@ class AttnRanges:
             )
 
     # Inplace Operation(append, insert, pop, extend, sort, clear_empty)
-    def append(self, r: AttnRange, check: bool = True) -> None:
+    def append(self, attn_range: AttnRange, check: bool = True) -> None:
         """Add the range to the end"""
         if check:
-            r.check_valid()
-            self._ranges.append(r)
+            attn_range.check_valid()
+            self._ranges.append(attn_range)
         else:
-            self._ranges.append(r)
+            self._ranges.append(attn_range)
 
-    def insert(self, idx: int, r: AttnRange, check: bool = True) -> None:
+    def insert(self, idx: int, attn_range: AttnRange, check: bool = True) -> None:
         """Insert the range to the 'idx'-th position,
         NOTE: if idx >= self.size, then use 'append' instead
         """
         if check:
             self.check_valid_idx(idx)
-            r.check_valid()
+            attn_range.check_valid()
             self._ranges.insert(idx, range)
         else:
             self._ranges.insert(idx, range)
@@ -179,22 +178,26 @@ class AttnRanges:
 
         return True
 
-    # 高级方法(make_range_local, make_ranges_local, to_local_ranges)
-    # NOTE(xiaowu): 这些高级方法都是为了能够更方便实现各种ranges的映射
-    # NOTE(xiaowu): 什么是AttnRanges的local_ranges?
+    # 高级方法(make_range_local, make_ranges_local, to_local_ranges, find_hole_ranges, find_overlap_ranges)
+    # NOTE: 这些高级方法都是为了能够更方便实现各种ranges的映射
+    # NOTE: 什么是AttnRanges的local_ranges?
     #     因为AttnRanges中的每个attn_range都是描述实际内存中的一片连续存储,
     #     所以AttnRanges可以选择映射到实际内存中的某一片连续存储, 这片连续的存储满足:
     #         1. 能够存储AttnRanges中的所有attn_range
     #         2. 所有的attn_range在其中有序存储(按照range.start和range.end)
     #     所以AttnRanges的local_ranges就是每个attn_range在这片内存中的实际位置
+    # Example::
+    #     [[5, 10), [15, 20), [25, 30)]的local_ranges是[[0, 5), [5, 10), [10, 15)]
     @nvtx.instrument_nvtx
     def make_range_local(
         self,
-        r: AttnRange,
+        attn_range: AttnRange,
         is_self_merged: bool = False,
         prefix_offset: Optional[List[int]] = None,
     ) -> AttnRange:
-        """ """
+        """
+        将attn_range映射到self的local_ranges中，并返回attn_range在local_ranges中的位置
+        """
 
         def binary_search(arr: list, target: int) -> int:
             # left左侧都是小于等于target，right右侧都是大于target
@@ -220,15 +223,15 @@ class AttnRanges:
         else:
             assert len(prefix_offset) == len(merged_ranges)
 
-        le_idx = binary_search(merged_ranges, r)
+        le_idx = binary_search(merged_ranges, attn_range)
         target_range = merged_ranges[le_idx]
 
-        if r.is_subrange_of(target_range):
-            start = prefix_offset[le_idx] + r.start - target_range.start
-            return AttnRange(start=start, end=start + r.size)
+        if attn_range.is_subrange_of(target_range):
+            start = prefix_offset[le_idx] + attn_range.start - target_range.start
+            return AttnRange(start=start, end=start + attn_range.size)
         else:
             raise ValueError(
-                f"The range {r} is not in the (even merged) ranges {merged_ranges}"
+                f"The range {attn_range} is not in the (even merged) ranges {merged_ranges}"
             )
 
     def make_ranges_local(
@@ -264,9 +267,9 @@ class AttnRanges:
             prefix_offset.append(prefix_offset[-1] + item.size)
         prefix_offset.pop()
 
-        for r in ranges:
+        for attn_range in ranges:
             local_range = merged_ranges.make_range_local(
-                r, is_self_merged=True, prefix_offset=prefix_offset
+                attn_range, is_self_merged=True, prefix_offset=prefix_offset
             )
             local_ranges.append(local_range)
 
@@ -397,7 +400,9 @@ class AttnRanges:
             attn_ranges = ranges
         else:
             attn_ranges = AttnRanges()
-            _ranges = [AttnRange.from_range(r, check=False) for r in ranges]
+            _ranges = [
+                AttnRange.from_range(attn_range, check=False) for attn_range in ranges
+            ]
             attn_ranges._ranges = _ranges
 
         if check:
@@ -467,182 +472,5 @@ class AttnRanges:
 
 
 RangesType: TypeAlias = AttnRanges | NaiveRanges
-
-
-@nvtx.instrument_nvtx
-def find_hole_ranges(
-    all_ones_ranges: NaiveRanges,
-    all_zeros_ranges: NaiveRanges,
-    axis_start: int,
-    axis_end: int,
-) -> NaiveRanges:
-    """axis is a one-dim array, made of only 0s and 1s,
-    find all the 'hole ranges' as follows:
-    0. the axis is initialized as all 0s
-    1. first of all, all_ones_ranges take up the positions in axis with 1s
-    2. then, all_zeros_ranges take up the positions in axis with 0s
-    3. finally, in the axis, there'll leave some consecutive 1s, \
-        which are defined as the 'hole ranges'
-    """
-    assert (
-        axis_start < axis_end
-    ), f"axis_start ({axis_start}) should be smaller than axis_end ({axis_end})"
-    axis = np.zeros(axis_end - axis_start, dtype=int)
-
-    for all_ones_range in all_ones_ranges:
-        start = all_ones_range[0] - axis_start
-        end = all_ones_range[1] - axis_start
-        axis[start:end] = 1
-
-    for all_zeros_range in all_zeros_ranges:
-        start = all_zeros_range[0] - axis_start
-        end = all_zeros_range[1] - axis_start
-        axis[start:end] = 0
-
-    diff = np.diff(axis)
-
-    start_indices = np.where(diff == 1)[0] + 1
-    end_indices = np.where(diff == -1)[0] + 1
-
-    if axis[0]:
-        start_indices = np.insert(start_indices, 0, 0)
-
-    if axis[-1]:
-        end_indices = np.append(end_indices, len(axis))
-
-    hole_ranges = list(zip(start_indices + axis_start, end_indices + axis_start))
-
-    return hole_ranges
-
-
-@nvtx.instrument_nvtx
-def find_hole_ranges_new(
-    ranges1: AttnRanges,
-    ranges2: AttnRanges,
-) -> AttnRanges:
-    ranges1 = ranges1.merge()
-    ranges2 = ranges2.merge()
-
-    p1 = 0
-    p2 = 0
-
-    hole_ranges = AttnRanges()
-
-    def get_hole_range(r1: AttnRange, r2: AttnRange) -> AttnRange:
-        return AttnRange(start=r1.start, end=min(r1.end, r2.start))
-
-    while p1 < len(ranges1) and p2 < len(ranges2):
-        r1 = ranges1[p1]
-        r2 = ranges2[p2]
-
-        if r1.end > r2.end:
-            p2 += 1
-        else:
-            p1 += 1
-
-        if r1.start < r2.start:
-            hole_ranges.append(get_hole_range(r1, r2))
-
-        if r1.start < r2.end:
-            try:
-                r1.start = r2.end
-            except RangeError:
-                pass
-
-    while p1 < len(ranges1):
-        hole_ranges.append(ranges1[p1])
-        p1 += 1
-
-    hole_ranges = hole_ranges.merge()
-
-    return hole_ranges
-
-
-@nvtx.instrument_nvtx
-def find_overlap_ranges(
-    ranges1: NaiveRanges,
-    ranges2: NaiveRanges,
-    axis_start: int,
-    axis_end: int,
-) -> NaiveRanges:
-    """axis is a one-dim array, made of only 0s and 1s,
-    find all the 'overlap ranges' as follows:
-    0. the axis is initialized as all 0s
-    1. first of all, ranges1 take up the positions in axis with 1
-    2. then, ranges2 add to the positions in axis also with 1
-    3. finally, in the axis, there'll leave some consecutive 2s, turned to True, then turned to 1s, \
-        which are defined as the 'overlap ranges'
-    """
-    assert (
-        axis_start < axis_end
-    ), f"axis_start ({axis_start}) should be smaller than axis_end ({axis_end})"
-    axis = np.zeros(axis_end - axis_start, dtype=int)
-
-    for range1 in ranges1:
-        start = range1[0] - axis_start
-        end = range1[1] - axis_start
-        axis[start:end] += 1
-
-    for range2 in ranges2:
-        start = range2[0] - axis_start
-        end = range2[1] - axis_start
-        axis[start:end] += 1
-
-    axis = (axis == 2).astype(int)
-
-    diff = np.diff(axis)
-
-    start_indices = np.where(diff == 1)[0] + 1
-    end_indices = np.where(diff == -1)[0] + 1
-
-    if axis[0]:
-        start_indices = np.insert(start_indices, 0, 0)
-
-    if axis[-1]:
-        end_indices = np.append(end_indices, len(axis))
-
-    hole_ranges = list(zip(start_indices + axis_start, end_indices + axis_start))
-
-    return hole_ranges
-
-
-@nvtx.instrument_nvtx
-def find_overlap_ranges_new(
-    ranges1: AttnRanges,
-    ranges2: AttnRanges,
-) -> AttnRanges:
-    ranges1 = ranges1.merge()
-    ranges2 = ranges2.merge()
-
-    p1 = 0
-    p2 = 0
-
-    overlap_ranges = []
-
-    def is_overlap(r1: AttnRange, r2: AttnRange) -> bool:
-        return (r1.start < r2.end and r1.end > r2.start) or (
-            r2.start < r1.end and r2.end > r1.start
-        )
-
-    def get_overlap_range(r1: AttnRange, r2: AttnRange) -> AttnRange:
-        return AttnRange(start=max(r1.start, r2.start), end=min(r1.end, r2.end))
-
-    while p1 < len(ranges1) and p2 < len(ranges2):
-        r1 = ranges1[p1]
-        r2 = ranges2[p2]
-
-        if r1.end > r2.end:
-            p2 += 1
-        else:
-            p1 += 1
-
-        if is_overlap(r1, r2):
-            overlap_ranges.append(get_overlap_range(r1, r2))
-
-    overlap_ranges = AttnRanges.from_ranges(overlap_ranges)
-    overlap_ranges = overlap_ranges.merge()
-
-    return overlap_ranges
-
 
 NestedIntList: TypeAlias = Union[List[int], Tuple[int, ...], Sequence["NestedIntList"]]
