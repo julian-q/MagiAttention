@@ -218,20 +218,16 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         f"as well as {num_chunks_q=} and {num_chunks_k=}"
     )
 
-    AttnRanges.check_valid_qk_ranges(
-        q_ranges=q_ranges,
-        k_ranges=k_ranges,
-        is_self_attn=True,
-    )
-
     # --------------    extract some trivial meta info   -------------- #
 
     total_seqlen = total_seqlen_q
     num_chunks = num_chunks_q
 
     # q_ranges can be transferred to cu_seqlens_q for sure
-    # NOTE: add a check when there is a is_cu_seqlens() method !!
-    cu_seqlens = q_ranges.to_cu_seqlens()
+    assert q_ranges.is_cu_seqlens(
+        total_seqlen
+    ), "q_ranges should be cu_seqlens for now."
+    cu_seqlens = q_ranges.to_cu_seqlens(total_seqlen)
     seqlens = cu_seqlens2seqlens(cu_seqlens)
 
     # NOTE: for now, we don't permute seqlens

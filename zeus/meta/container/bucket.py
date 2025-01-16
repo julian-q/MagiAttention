@@ -3,12 +3,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from zeus.common.range import AttnRange
-from zeus.common.ranges import (
-    AttnRanges,
-    NaiveRanges,
-    find_hole_ranges,
-    find_hole_ranges_new,
-)
+from zeus.common.ranges import AttnRanges
 
 from .chunk import AttnChunk
 
@@ -39,23 +34,9 @@ class AttnBucket:
 
         q_ranges = self.q_ranges
         k_ranges = self.k_ranges
-        axis_start, axis_end = min(q_ranges.start, k_ranges.start), max(
-            q_ranges.end, k_ranges.end
+        hole_ranges = k_ranges.find_hole_ranges(
+            overlap_range=q_ranges,
         )
-        hole_ranges: NaiveRanges = find_hole_ranges(
-            all_ones_ranges=k_ranges.ranges,
-            all_zeros_ranges=q_ranges.ranges,
-            axis_start=axis_start,
-            axis_end=axis_end,
-        )
-
-        hole_ranges_new = find_hole_ranges_new(
-            ranges1=k_ranges,
-            ranges2=q_ranges,
-        )
-        assert hole_ranges_new == AttnRanges.from_ranges(
-            hole_ranges
-        ), f"{hole_ranges_new} != {hole_ranges}, \nranges1: {k_ranges}, \nranges2: {q_ranges}"
 
         for range in hole_ranges:
             remote_k_ranges.append(AttnRange.from_range(range), check=False)

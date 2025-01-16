@@ -43,17 +43,23 @@ class AttnRange:
     def seqlen(self) -> int:
         return self.size
 
-    @property
-    def range(self) -> NaiveRange:
+    def to_naive_range(self) -> NaiveRange:
         return (self._start, self._end)
 
     @staticmethod
     def from_range(
-        range: Union[NaiveRange, "AttnRange"],
+        attn_range: Union[NaiveRange, "AttnRange"],
+        check: bool = True,
     ) -> "AttnRange":
-        if isinstance(range, AttnRange):  # just copy
-            return range
-        return AttnRange(start=range[0], end=range[1])
+        if isinstance(attn_range, AttnRange):  # just copy
+            res = attn_range
+        else:
+            res = AttnRange(start=attn_range[0], end=attn_range[1])
+
+        if check:
+            res.check_valid()
+
+        return res
 
     def offset(self, offset: int) -> "AttnRange":
         return AttnRange(start=self._start + offset, end=self._end + offset)
@@ -104,7 +110,7 @@ class AttnRange:
     def check_valid(self, start: int | None = None, end: int | None = None) -> None:
         if not self.is_valid(start, end):
             raise RangeError(
-                f"The range {(start, end)} is invalid against the rule: '0 <= start <= end'"
+                f"The attn_range {(start, end)} is invalid against the rule: '0 <= start <= end'"
             )
 
     def __len__(self) -> int:
@@ -112,14 +118,11 @@ class AttnRange:
 
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, AttnRange):
-            return self.range == other.range
+            return self._start == other._start and self._end == other._end
         return False
 
     def __repr__(self) -> str:
         return f"[{self._start}, {self._end})"
-
-    def __lt__(self, other: "AttnRange") -> bool:
-        return self._start < other._start
 
 
 RangeType: TypeAlias = AttnRange | NaiveRange

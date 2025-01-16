@@ -54,7 +54,6 @@ class TestDispatcher(DistTestBase):
                 (5, 12),
                 (12, 16),
             ],
-            as_cu_seqlens=True,
         )
 
         k_ranges = AttnRanges.from_ranges(
