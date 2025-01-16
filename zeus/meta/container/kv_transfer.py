@@ -3,9 +3,9 @@ from typing import List, Literal, Set
 
 import torch.distributed as dist
 
+from zeus.common.range import AttnRange
+from zeus.common.ranges import AttnRanges
 from zeus.utils import nvtx
-
-from ..common.ranges import AttnRange, AttnRanges
 
 
 @dataclass

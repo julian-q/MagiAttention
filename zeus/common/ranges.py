@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 from typing import Any, Iterator, List, Optional, Sequence, Tuple, TypeAlias, Union
 
 import torch
@@ -35,7 +34,28 @@ def check_valid_cu_seqlens(cu_seqlens: List[int], seq_len: int) -> None:
 
 
 class AttnRanges:
-    """A dataclass to manage a list of 'AttnRange' objects for attention computation"""
+    """
+    A dataclass to manage a list of 'AttnRange' objects for attention computation
+
+    高级方法(make_range_local, make_ranges_local, to_local_ranges, find_hole_ranges, find_overlap_ranges)
+    NOTE: 这些高级方法都是为了能够更方便实现各种ranges的映射
+    NOTE: 什么是AttnRanges的local_ranges?
+        因为AttnRanges中的每个attn_range都是描述实际内存中的一片连续存储,
+        所以AttnRanges可以选择映射到实际内存中的某一片连续存储, 这片连续的存储满足:
+            1. 能够存储AttnRanges中的所有attn_range
+            2. 所有的attn_range在其中有序存储(按照range.start和range.end)
+        所以AttnRanges的local_ranges就是每个attn_range在这片内存中的实际位置
+    Example::
+        [[5, 10), [15, 20), [25, 30)]的local_ranges是[[0, 5), [5, 10), [10, 15)]
+        [[5, 10), [25, 30), [15, 20)]的local_ranges是[[0, 5), [5, 10), [10, 15)]
+        它们的映射关系都如下所示:
+        .....[5, 10).....[15, 20).....[25, 30).....
+                |           |             |
+             [0, 5)      [5, 10)      [10, 15)
+    NOTE: AttnRanges的sorted和merged解释如下:
+        sorted要求AttnRanges中的每个attn_range都按照start由小到大排序
+        merged要求AttnRanges中的每个attn_range都按照start由小到大排序, 并且相邻的attn_range不能有重叠
+    """
 
     def __init__(self) -> None:
         self._ranges: List[AttnRange] = []
@@ -63,7 +83,7 @@ class AttnRanges:
     ) -> None:
         if not self.is_valid():
             raise ValueError(
-                f"Some of the {self.ranges=} is invalid against the rule: '0 <= start <= end'"
+                f"Some of the {self._ranges=} is invalid against the rule: '0 <= start <= end'"
             )
 
     # Inplace Operation(append, insert, pop, extend, sort, clear_empty)
@@ -82,9 +102,9 @@ class AttnRanges:
         if check:
             self.check_valid_idx(idx)
             attn_range.check_valid()
-            self._ranges.insert(idx, range)
+            self._ranges.insert(idx, attn_range)
         else:
-            self._ranges.insert(idx, range)
+            self._ranges.insert(idx, attn_range)
 
     def extend(self, ranges: "AttnRanges", check: bool = True) -> None:
         if check:
@@ -121,17 +141,14 @@ class AttnRanges:
         ]
 
     @nvtx.instrument_nvtx
-    def sort(self, reverse: bool = False) -> "AttnRanges":
+    def sort(self) -> "AttnRanges":
         """
-        Sort the attn_ranges by 'attn_range.start' in ascending order if 'reverse=False', \
-        otherwise in descending order
+        Sort the attn_ranges by 'attn_range.start' in ascending order
 
         NOTE: python的sort是稳定的, 因此当start相同时, 会保持原来的顺序
         """
         return AttnRanges.from_ranges(
-            sorted(
-                self._ranges, key=lambda attn_range: attn_range.start, reverse=reverse
-            )
+            sorted(self._ranges, key=lambda attn_range: attn_range.start)
         )
 
     @nvtx.instrument_nvtx
@@ -195,16 +212,6 @@ class AttnRanges:
         ), "The ranges can not be converted to cu_seqlens"
         return [0] + [attn_range.end for attn_range in self._ranges]
 
-    # 高级方法(make_range_local, make_ranges_local, to_local_ranges, find_hole_ranges, find_overlap_ranges)
-    # NOTE: 这些高级方法都是为了能够更方便实现各种ranges的映射
-    # NOTE: 什么是AttnRanges的local_ranges?
-    #     因为AttnRanges中的每个attn_range都是描述实际内存中的一片连续存储,
-    #     所以AttnRanges可以选择映射到实际内存中的某一片连续存储, 这片连续的存储满足:
-    #         1. 能够存储AttnRanges中的所有attn_range
-    #         2. 所有的attn_range在其中有序存储(按照range.start和range.end)
-    #     所以AttnRanges的local_ranges就是每个attn_range在这片内存中的实际位置
-    # Example::
-    #     [[5, 10), [15, 20), [25, 30)]的local_ranges是[[0, 5), [5, 10), [10, 15)]
     @nvtx.instrument_nvtx
     def make_range_local(
         self,
@@ -224,7 +231,7 @@ class AttnRanges:
             local_range(AttnRange): attn_range在self的local_ranges中的位置
         """
 
-        def binary_search(arr: list, target: int) -> int:
+        def binary_search(arr: list[AttnRange], target: AttnRange) -> int:
             # left左侧都是小于等于target，right右侧都是大于target
             left, right = 0, len(arr) - 1
             while left <= right:
@@ -304,6 +311,23 @@ class AttnRanges:
         self,
         other_attn_ranges: "AttnRanges",
     ) -> "AttnRanges":
+        """
+        返回self - other_attn_ranges的结果
+        NOTE: 这里的-是集合的差集, 因此返回的hole_ranges中的range是self中的range,
+            但是不包含other_attn_ranges中的range
+
+        Args:
+            other_attn_ranges(AttnRanges): 需要被减去的range
+
+        Returns:
+            NOTE: hole_ranges is merged
+            hole_ranges(AttnRanges): self - other_attn_ranges的结果
+
+        Example::
+            self = [[0, 10), [15, 20), [20, 30)]
+            other_attn_ranges = [[5, 10), [25, 30)]
+            return [[0, 5), [15, 25)]
+        """
         ranges1 = self.merge()
         ranges2 = other_attn_ranges.merge()
 
@@ -345,13 +369,28 @@ class AttnRanges:
         self: "AttnRanges",
         other_attn_ranges: "AttnRanges",
     ) -> "AttnRanges":
+        """
+        返回self和other_attn_ranges的交集
+
+        Args:
+            other_attn_ranges(AttnRanges): 需要被求交集的range
+
+        Returns:
+            NOTE: overlap_ranges is merged
+            overlap_ranges(AttnRanges): self和other_attn_ranges的交集
+
+        Example::
+            self = [[0, 10), [15, 20), [25, 30)]
+            other_attn_ranges = [[5, 10), [18, 30)]
+            return [[5, 10), [18, 30)]
+        """
         ranges1 = self.merge()
         ranges2 = other_attn_ranges.merge()
 
         p1 = 0
         p2 = 0
 
-        overlap_ranges = []
+        overlap_range_list = []
 
         def is_overlap(r1: AttnRange, r2: AttnRange) -> bool:
             return (r1.start < r2.end and r1.end > r2.start) or (
@@ -371,27 +410,12 @@ class AttnRanges:
                 p1 += 1
 
             if is_overlap(r1, r2):
-                overlap_ranges.append(get_overlap_range(r1, r2))
+                overlap_range_list.append(get_overlap_range(r1, r2))
 
-        overlap_ranges = AttnRanges.from_ranges(overlap_ranges)
+        overlap_ranges = AttnRanges.from_ranges(overlap_range_list)
         overlap_ranges = overlap_ranges.merge()
 
         return overlap_ranges
-
-    # def to_local_ranges(self) -> "AttnRanges":
-    # REVIEW(xiaowu): 检查这个方法的正确性，并判断是否需要
-    #     local_ranges = AttnRanges()
-
-    #     start = 0
-    #     for global_range in self._ranges:
-    #         end = start + global_range.size
-    #         local_ranges.append(
-    #             AttnRange(start=start, end=end),
-    #             check=False,
-    #         )
-    #         start = end
-
-    #     return local_ranges
 
     def to_tensor(self, device: str = "cpu") -> torch.Tensor:
         if self.is_empty():
