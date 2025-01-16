@@ -1,8 +1,12 @@
+import torch
 import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-# from zeus.dispatch import SequenceDispatcher
+from zeus.common import AttnRanges
+from zeus.common.enum import AttnMaskType
+from zeus.functional import dispatch_func, undispatch_func
+from zeus.meta.solver import calc_dispatch_meta_from_qk_ranges
 from zeus.testing.dist_common import DistTestBase, with_comms
 
 WORLD_SIZE = 4
@@ -25,108 +29,110 @@ class TestDispatcher(DistTestBase):
     @skip_if_lt_x_gpu(WORLD_SIZE)
     @with_comms
     def test_dispatch_and_undispatch(self):
-        # TODO: reconstruct the "dispatcher",
-        # even though it might be a series of functions instead of an instance
-        pass
+        # --------------      setup       -------------- #
 
-        # --------------      setup       --------------#
+        rank = self.rank
+        cp_size = self.world_size
+        world_group_nccl = self.process_group
+        manual_seed = self.seed
+        device = torch.cuda.current_device()
+        torch.manual_seed(manual_seed)
 
-        # rank = self.rank
-        # cp_size = self.world_size
-        # world_group = self.process_group
-        # manual_seed = self.seed
-        # device = torch.cuda.current_device()
-        # torch.manual_seed(manual_seed)
+        world_group_gloo = dist.new_group(ranks=list(range(cp_size)), backend="gloo")
 
-        # world_group_gloo = dist.new_group(ranks=list(range(cp_size)), backend="gloo")
+        # --------------      init sample meta      -------------- #
 
-        # --------------      init sample meta      --------------#
+        # TODO: limited to self-attn settings for now
+        is_same_source = True
+        is_q_permutable = True
+        is_k_permutable = True
 
-        # q_ranges = [
-        #     (0, 1),
-        #     (1, 5),
-        #     (5, 12),
-        #     (12, 16),
-        # ]
+        q_ranges = AttnRanges.from_ranges(
+            [
+                (0, 1),
+                (1, 5),
+                (5, 12),
+                (12, 16),
+            ],
+            as_cu_seqlens=True,
+        )
 
-        # k_ranges = [
-        #     (0, 1),
-        #     (1, 4),
-        #     (5, 10),
-        #     (12, 13),
-        # ]
+        k_ranges = AttnRanges.from_ranges(
+            [
+                (0, 1),
+                (1, 4),
+                (5, 10),
+                (12, 13),
+            ]
+        )
 
-        # attn_type = AttnType.SELF_ATTN
-        # attn_mask_type = [AttnMaskType.FULL for _ in range(len(q_ranges))]
+        attn_mask_type = [  # TODO: limited to all full attn masks for now
+            AttnMaskType.FULL for _ in range(len(q_ranges))
+        ]
 
-        # chunk_size = 4
-        # overlap_degree = 1
+        chunk_size = 4
+        overlap_degree = 1  # TODO: limited to 1 for now
 
-        # seq_dim = 0
+        seq_dim = 0
 
-        # shuffle_times = 100
-        # shuffle_timeout = 10
-        # shuffle_seed = 42
+        # --------------      init global q, k       -------------- #
 
-        # --------------      init global data       --------------#
+        global_q = torch.arange(q_ranges.last.end * 2).view(-1, 2).to(device)  # (sq, 2)
+        global_k = global_q * -1  # (sq, 2), due to self-attn
 
-        # global_q = torch.arange(q_ranges[-1][1] * 2).view(-1, 2).to(device)  # (sq, 2)
-        # global_k = global_q * -1  # (sq, 2), due to self-attn
+        # --------------      compute meta       -------------- #
 
-        # --------------      init dispatcher       --------------#
+        meta_q, meta_k, buckets_per_rank = calc_dispatch_meta_from_qk_ranges(
+            q_ranges=q_ranges,
+            k_ranges=k_ranges,
+            attn_mask_type=attn_mask_type,
+            total_seqlen_q=q_ranges.end,
+            total_seqlen_k=q_ranges.end,  # self-attn
+            chunk_size=chunk_size,
+            overlap_degree=overlap_degree,
+            cp_rank=rank,
+            cp_size=cp_size,
+            cp_group_nccl=world_group_nccl,
+            cp_group_gloo=world_group_gloo,
+            is_same_source=is_same_source,
+            is_q_permutable=is_q_permutable,
+            is_k_permutable=is_k_permutable,
+        )
 
-        # dispatcher = SequenceDispatcher()
+        assert len(buckets_per_rank) == cp_size
 
-        # --------------      compute meta       --------------#
+        # --------------      dispatch to get host q, k       -------------- #
 
-        # meta_q, meta_k = dispatcher.compute_meta(
-        #     q_ranges=q_ranges,
-        #     k_ranges=k_ranges,
-        #     attn_type=attn_type,
-        #     attn_mask_type=attn_mask_type,
-        #     cp_rank=rank,
-        #     cp_size=cp_size,
-        #     cp_group_nccl=world_group,
-        #     cp_group_gloo=world_group_gloo,
-        #     chunk_size=chunk_size,
-        #     overlap_degree=overlap_degree,
-        #     shuffle_times=shuffle_times,
-        #     shuffle_timeout=shuffle_timeout,
-        #     shuffle_seed=shuffle_seed,
-        # )
+        host_q = dispatch_func(
+            x_global=global_q,
+            meta=meta_q,
+            seq_dim=seq_dim,
+        )
 
-        # --------------      dispatch data       --------------#
+        host_k = dispatch_func(
+            x_global=global_k,
+            meta=meta_k,
+            seq_dim=seq_dim,
+        )
 
-        # local_q = dispatcher.dispatch(
-        #     x_global=global_q,
-        #     meta=meta_q,
-        #     seq_dim=seq_dim,
-        # )
+        # --------------      undispatch to restore global q, k       -------------- #
 
-        # local_k = dispatcher.dispatch(
-        #     x_global=global_k,
-        #     meta=meta_k,
-        #     seq_dim=seq_dim,
-        # )
+        global_q_und = undispatch_func(
+            x_local=host_q,
+            meta=meta_q,
+            seq_dim=seq_dim,
+        )
 
-        # --------------      undispatch data       --------------#
+        global_k_und = undispatch_func(
+            x_local=host_k,
+            meta=meta_k,
+            seq_dim=seq_dim,
+        )
 
-        # global_q_und = dispatcher.undispatch(
-        #     x_local=local_q,
-        #     meta=meta_q,
-        #     seq_dim=seq_dim,
-        # )
+        # --------------      check       -------------- #
 
-        # global_k_und = dispatcher.undispatch(
-        #     x_local=local_k,
-        #     meta=meta_k,
-        #     seq_dim=seq_dim,
-        # )
-
-        # --------------      check       --------------#
-
-        # assert torch.equal(global_q_und, global_q)
-        # assert torch.equal(global_k_und, global_k)
+        assert torch.equal(global_q_und, global_q)
+        assert torch.equal(global_k_und, global_k)
 
 
 if __name__ == "__main__":

@@ -47,20 +47,6 @@ def rprint_rank(msg: str, rank: int | None = None, width: int = 50):
         )
 
 
-def seqlens2cu_seqlens(seqlens: List[int]) -> List[int]:
-    cu_seqlens = [0]
-    for seqlen in seqlens:
-        cu_seqlens.append(cu_seqlens[-1] + seqlen)
-    return cu_seqlens
-
-
-def cu_seqlens2seqlens(cu_seqlens: List[int]) -> List[int]:
-    seqlens = []
-    for i in range(1, len(cu_seqlens)):
-        seqlens.append(cu_seqlens[i] - cu_seqlens[i - 1])
-    return seqlens
-
-
 NestedIntList: TypeAlias = Union[List[int], Tuple[int, ...], Sequence["NestedIntList"]]
 
 
@@ -103,11 +89,11 @@ def run_with_timeout(func: Callable, timeout_sec: int | None = None) -> Any:
             raise e
 
 
-def wrap_to_list(x: Any) -> List[Any]:
+def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> List[Any]:
     if isinstance(x, (list, tuple)):
         return list(x)
     else:
-        return [x]
+        return [x] * broadcast_to_length
 
 
 def is_list_all(_list: List[Any], val: Any = None, just_same: bool = False) -> bool:

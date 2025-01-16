@@ -28,7 +28,7 @@ class TestGroundTruthDispatcher(DistTestBase):
 
     @skip_if_lt_x_gpu(WORLD_SIZE)
     def test_make_sub_mask_with_sub_area(self):
-        # --------------      init sample meta      --------------#
+        # --------------      init sample meta      -------------- #
 
         q_ranges = AttnRanges.from_ranges(
             [
@@ -55,7 +55,7 @@ class TestGroundTruthDispatcher(DistTestBase):
             AttnMaskType.CAUSAL,
         ]
 
-        # --------------      init attn mask       --------------#
+        # --------------      init attn mask       -------------- #
 
         attn_mask = AttnMask.from_ranges(
             q_ranges=q_ranges,
@@ -67,7 +67,7 @@ class TestGroundTruthDispatcher(DistTestBase):
 
         assert attn_mask.area == 82
 
-        # ------    sub mask 1    ------#
+        # ------    sub mask 1    ------ #
 
         sub_q_range = AttnRange.from_range((4, 13))
         sub_k_range = AttnRange.from_range((1, 13))
@@ -96,7 +96,7 @@ class TestGroundTruthDispatcher(DistTestBase):
             AttnMaskType.FULL,
         ]
 
-        # ------    sub mask 2    ------#
+        # ------    sub mask 2    ------ #
 
         sub_q_range = AttnRange.from_range((0, 14))
         sub_k_range = AttnRange.from_range((0, 7))
@@ -125,7 +125,7 @@ class TestGroundTruthDispatcher(DistTestBase):
             AttnMaskType.FULL,
         ]
 
-        # ------    sub mask 3    ------#
+        # ------    sub mask 3    ------ #
 
         sub_q_range = AttnRange.from_range((5, 16))
         sub_k_range = AttnRange.from_range((3, 11))
@@ -155,7 +155,7 @@ class TestGroundTruthDispatcher(DistTestBase):
             AttnMaskType.FULL,
         ]
 
-        # ------    sub mask 4    ------#
+        # ------    sub mask 4    ------ #
 
         sub_q_range = AttnRange.from_range((4, 12))
         sub_k_range = AttnRange.from_range((4, 12))
@@ -185,7 +185,7 @@ class TestGroundTruthDispatcher(DistTestBase):
 
     @skip_if_lt_x_gpu(WORLD_SIZE)
     def test_compute_self_attn_areas(self):
-        # --------------      init sample meta      --------------#
+        # --------------      init sample meta      -------------- #
 
         q_ranges = AttnRanges.from_ranges(
             [
@@ -215,7 +215,7 @@ class TestGroundTruthDispatcher(DistTestBase):
         chunk_size = 4
         overlap_degree = 1
 
-        # --------------      init attn mask       --------------#
+        # --------------      init attn mask       -------------- #
 
         attn_mask = AttnMask.from_ranges(
             q_ranges=q_ranges,
@@ -225,7 +225,7 @@ class TestGroundTruthDispatcher(DistTestBase):
             total_seqlen_k=q_ranges.end,  # use the end of sq
         )
 
-        # --------------      init gt dispatcher       --------------#
+        # --------------      init gt dispatcher       -------------- #
 
         gt_dispatcher = GroundTruthDispatcher()
         global_bucket = gt_dispatcher._compute_self_attn_areas(

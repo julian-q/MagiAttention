@@ -18,22 +18,19 @@ class DispatchMeta:
     attn_mask_type: List[AttnMaskType]
 
     ranges: AttnRanges
-    ranges_permed: AttnRanges
 
     batch_size: int
     total_seqlen: int
-
-    cp_rank: int
-    cp_size: int
-    cp_group_nccl: dist.ProcessGroup
-    cp_group_gloo: dist.ProcessGroup
 
     chunk_size: int
     num_chunks: int
 
     overlap_degree: int
-    num_remote_tokens: int
-    overlap_split_size_list: List[int]
+
+    cp_rank: int
+    cp_size: int
+    cp_group_nccl: dist.ProcessGroup
+    cp_group_gloo: dist.ProcessGroup
 
     seqlens: List[int]
     seqlens_permed: List[int]
@@ -43,55 +40,15 @@ class DispatchMeta:
     cu_seqlens: List[int]
     cu_seqlens_permed: List[int]
 
-    partitions_permed: List[List[int]]
+    partitions: List[List[int]]
     partitions_perm_idxs: List[int]
     partitions_unperm_idxs: List[int]
 
     global_bucket: AttnBucket
     buckets_per_rank: List[AttnBucket]
 
-    host_qk_ranges_global_per_rank: List[AttnRanges]
-    host_qk_ranges_local_per_rank: List[AttnRanges]
-    host_req_k_ranges_global_per_rank: List[AttnRanges]
-    remote_k_ranges_global_per_rank: List[AttnRanges]
-    remote_k_ranges_local_per_rank: List[AttnRanges]
-
-    # kv_transfer_table: KVTransferTable # NOTE: removed it from dispatch meta
-
-    kv_input_split_size_list: List[int]
-    kv_output_split_size_list: List[int]
-    kv_dst_indices_list: List[List[int]]
-    kv_src_index_list: List[int]
-
-    local_attn_arg_q_ranges: AttnRanges
-    local_attn_arg_k_ranges: AttnRanges
-    local_attn_arg_is_causal_mapping: List[bool]
-    local_attn_arg_max_seqlen_q: int
-    local_attn_arg_max_seqlen_k: int
-
-    remote_attn_args_q_ranges_list: List[AttnRanges]
-    remote_attn_args_k_ranges_list: List[AttnRanges]
-    remote_attn_args_is_causal_mapping_list: List[List[bool]]
-    remote_attn_args_max_seqlen_q_list: List[int]
-    remote_attn_args_max_seqlen_k_list: List[int]
-
     def __post_init__(self) -> None:
-        assert len(self.kv_input_split_size_list) == len(
-            self.kv_dst_indices_list
-        ), f"The {len(self.kv_input_split_size_list)=} should be equal to {len(self.kv_dst_indices_list)=}."  # noqa
-
-        assert len(self.kv_output_split_size_list) == len(
-            self.kv_src_index_list
-        ), f"The {len(self.kv_output_split_size_list)=} should be equal to {len(self.kv_src_index_list)=}."  # noqa
-
-        assert (
-            len(self.local_attn_arg_is_causal_mapping)
-            == self.local_attn_arg_q_ranges.size
-            == self.local_attn_arg_k_ranges.size
-        ), (
-            f"The {len(self.local_attn_arg_is_causal_mapping)=} should be equal to "
-            f"{self.local_attn_arg_q_ranges.size=}, as well as {self.local_attn_arg_k_ranges.size=}."  # noqa
-        )
+        pass
 
     def __repr__(self, width: int = 30) -> str:
         """Customized __repr__ method for BaseConfig,
