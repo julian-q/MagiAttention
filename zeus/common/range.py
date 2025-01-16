@@ -124,17 +124,5 @@ class AttnRange:
     def __repr__(self) -> str:
         return f"[{self._start}, {self._end})"
 
-    def __lt__(self, other: "AttnRange") -> bool:
-        return self._start < other._start
-
-    def __le__(self, other: "AttnRange") -> bool:
-        return self._start <= other._start
-
-    def __gt__(self, other: "AttnRange") -> bool:
-        return self._start > other._start
-
-    def __ge__(self, other: "AttnRange") -> bool:
-        return self._start >= other._start
-
 
 RangeType: TypeAlias = AttnRange | NaiveRange

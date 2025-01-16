@@ -68,7 +68,7 @@ class AttnRanges:
 
     # Inplace Operation(append, insert, pop, extend, sort, clear_empty)
     def append(self, attn_range: AttnRange, check: bool = True) -> None:
-        """Add the range to the end"""
+        """Add the attn_range to the end"""
         if check:
             attn_range.check_valid()
             self._ranges.append(attn_range)
@@ -76,7 +76,7 @@ class AttnRanges:
             self._ranges.append(attn_range)
 
     def insert(self, idx: int, attn_range: AttnRange, check: bool = True) -> None:
-        """Insert the range to the 'idx'-th position,
+        """Insert the attn_range to the 'idx'-th position,
         NOTE: if idx >= self.size, then use 'append' instead
         """
         if check:
@@ -116,14 +116,20 @@ class AttnRanges:
         return self._ranges.pop(idx)
 
     def clear_empty(self) -> None:
-        self._ranges = [range for range in self._ranges if not range.is_empty()]
+        self._ranges = [
+            attn_range for attn_range in self._ranges if not attn_range.is_empty()
+        ]
 
     @nvtx.instrument_nvtx
     def sort(self, reverse: bool = False) -> "AttnRanges":
-        """Sort the ranges by 'range' in ascending order if 'reverse=False', \
+        """Sort the attn_ranges by 'attn_range.start' in ascending order if 'reverse=False', \
         otherwise in descending order
         """
-        return AttnRanges.from_ranges(sorted(self._ranges))
+        return AttnRanges.from_ranges(
+            sorted(
+                self._ranges, key=lambda attn_range: attn_range.start, reverse=reverse
+            )
+        )
 
     @nvtx.instrument_nvtx
     def merge(self) -> "AttnRanges":
@@ -132,17 +138,17 @@ class AttnRanges:
         _merged_ranges: List[AttnRange] = []
 
         start, end = None, None
-        for range in _ranges:
+        for attn_range in _ranges:
             if start is None:
-                start = range.start
-                end = range.end
+                start = attn_range.start
+                end = attn_range.end
                 _merged_ranges.append(AttnRange(start=start, end=end))
-            elif range.start > end:  # a new range can be merged
-                start = range.start
-                end = range.end
+            elif attn_range.start > end:  # a new range can be merged
+                start = attn_range.start
+                end = attn_range.end
                 _merged_ranges.append(AttnRange(start=start, end=end))
             else:
-                end = range.end
+                end = attn_range.end
                 _merged_ranges[-1].end = end
 
         return AttnRanges.from_ranges(_merged_ranges)
@@ -182,7 +188,7 @@ class AttnRanges:
         assert self.is_cu_seqlens(
             seq_len
         ), "The ranges can not be converted to cu_seqlens"
-        return [0] + [range.end for range in self._ranges]
+        return [0] + [attn_range.end for attn_range in self._ranges]
 
     # 高级方法(make_range_local, make_ranges_local, to_local_ranges, find_hole_ranges, find_overlap_ranges)
     # NOTE: 这些高级方法都是为了能够更方便实现各种ranges的映射
@@ -210,7 +216,7 @@ class AttnRanges:
             left, right = 0, len(arr) - 1
             while left <= right:
                 mid = (left + right) // 2
-                if arr[mid] > target:
+                if arr[mid].start > target.start:
                     right = mid - 1
                 else:
                     left = mid + 1
@@ -237,7 +243,7 @@ class AttnRanges:
             return AttnRange(start=start, end=start + attn_range.size)
         else:
             raise ValueError(
-                f"The range {attn_range} is not in the (even merged) ranges {merged_ranges}"
+                f"The attn_range {attn_range} is not in the (even merged) attn_ranges {merged_ranges}"
             )
 
     def make_ranges_local(
@@ -417,17 +423,17 @@ class AttnRanges:
         return attn_ranges
 
     def to_naive_ranges(self) -> NaiveRanges:
-        return [range.to_naive_range() for range in self._ranges]
+        return [attn_range.to_naive_range() for attn_range in self._ranges]
 
     @property
     def last(self) -> AttnRange:
         if self.is_empty():
-            raise ValueError("The ranges is empty, there is no last range")
+            raise ValueError("The ranges is empty, there is no last attn_range")
         return self._ranges[-1]
 
     @last.setter
-    def last(self, range: AttnRange) -> None:
-        self._ranges[-1] = range
+    def last(self, attn_range: AttnRange) -> None:
+        self._ranges[-1] = attn_range
 
     @property
     def size(self) -> int:
@@ -435,25 +441,25 @@ class AttnRanges:
 
     @property
     def seqlen(self) -> int:
-        return sum(range.size for range in self._ranges)
+        return sum(attn_range.size for attn_range in self._ranges)
 
     @property
     def max_seqlen(self) -> int:
         if self.is_empty():
             return 0
-        return max(range.size for range in self._ranges)
+        return max(attn_range.size for attn_range in self._ranges)
 
     @property
     def start(self) -> int:
         if self.is_empty():
             raise ValueError("The ranges is empty, there is no start")
-        return min(range.start for range in self._ranges)
+        return min(attn_range.start for attn_range in self._ranges)
 
     @property
     def end(self) -> int:
         if self.is_empty():
             raise ValueError("The ranges is empty, there is no end")
-        return max(range.end for range in self._ranges)
+        return max(attn_range.end for attn_range in self._ranges)
 
     def is_empty(self) -> bool:
         return self.size == 0

@@ -18,7 +18,7 @@ class TestFindHoleRanges(TestCase):
         other_ranges = AttnRanges.from_ranges([(2, 8), (25, 36), (42, 45)])
         with self.assertRaisesRegex(
             ValueError,
-            "The range [25, 36) is not in the (even merged) ranges [[0, 10), [20, 35), [40, 50)]",
+            "The attn_range [25, 36) is not in the (even merged) attn_ranges [[0, 10), [20, 35), [40, 50)]",
         ):
             ranges.make_ranges_local(other_ranges)
 
@@ -35,7 +35,7 @@ class TestFindHoleRanges(TestCase):
         invalid_range = AttnRange(60, 70)
         with self.assertRaisesRegex(
             ValueError,
-            "The range [60, 70) is not in the (even merged) ranges [[0, 10), [20, 35), [40, 50)]",
+            "The attn_range [60, 70) is not in the (even merged) attn_ranges [[0, 10), [20, 35), [40, 50)]",
         ):
             ranges.make_range_local(invalid_range)
 
@@ -43,7 +43,7 @@ class TestFindHoleRanges(TestCase):
         invalid_range = AttnRange(5, 25)
         with self.assertRaisesRegex(
             ValueError,
-            "The range [5, 25) is not in the (even merged) ranges [[0, 10), [20, 35), [40, 50)]",
+            "The attn_range [5, 25) is not in the (even merged) attn_ranges [[0, 10), [20, 35), [40, 50)]",
         ):
             ranges.make_range_local(invalid_range)
 
@@ -51,7 +51,7 @@ class TestFindHoleRanges(TestCase):
         invalid_range = AttnRange(25, 45)
         with self.assertRaisesRegex(
             ValueError,
-            "The range [25, 45) is not in the (even merged) ranges [[0, 10), [20, 35), [40, 50)]",
+            "The attn_range [25, 45) is not in the (even merged) attn_ranges [[0, 10), [20, 35), [40, 50)]",
         ):
             ranges.make_range_local(invalid_range)
 
