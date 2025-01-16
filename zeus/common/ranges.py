@@ -248,23 +248,22 @@ class AttnRanges:
 
     def make_ranges_local(
         self,
-        ranges: "AttnRanges",
+        other_attn_ranges: "AttnRanges",
         is_self_merged: bool = False,
     ) -> "AttnRanges":
         """
-        这个函数将self中的所有range变成连续且有序的ref—local-ranges，然后
-        将ranges中的每个range映射到ref—local-ranges中，并返回每个range
-        在ref—local-ranges的位置
+        将other_attn_ranges中的每个attn_range映射到self的local_ranges中, 并返回每个attn_range
+        在self的local_ranges中的位置
 
         Args:
-            ranges(AttnRanges): 需要被转换的range，必须是merge后的range
+            ranges(AttnRanges): 需要被转换的range, 必须是merge后的range
             is_self_merged(bool): 是否self已经merge
 
         Returns:
-            AttnRanges: 每个range在ref—local-ranges中的位置
+            local_ranges(AttnRanges): 每个attn_range在ref—local-ranges中的位置
 
         Complexity:
-            assume len(self) = m, len(ranges) = n
+            assume len(self) = m, len(other_attn_ranges) = n
             then the complexity is O(m + n * log(m))
         """
         local_ranges = AttnRanges()
@@ -279,7 +278,7 @@ class AttnRanges:
             prefix_offset.append(prefix_offset[-1] + item.size)
         prefix_offset.pop()
 
-        for attn_range in ranges:
+        for attn_range in other_attn_ranges:
             local_range = merged_ranges.make_range_local(
                 attn_range, is_self_merged=True, prefix_offset=prefix_offset
             )
