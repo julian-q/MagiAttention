@@ -208,7 +208,15 @@ class AttnRanges:
         prefix_offset: Optional[List[int]] = None,
     ) -> AttnRange:
         """
-        将attn_range映射到self的local_ranges中，并返回attn_range在local_ranges中的位置
+        将attn_range映射到self的local_ranges中, 并返回attn_range在local_ranges中的位置
+
+        Args:
+            attn_range(AttnRange): 需要被转换的attn_range
+            is_self_merged(bool): 是否self已经merge
+            prefix_offset(Optional[List[int]]): 如果prefix_offset为None, 则计算prefix_offset
+
+        Returns:
+            local_range(AttnRange): attn_range在self的local_ranges中的位置
         """
 
         def binary_search(arr: list, target: int) -> int:
@@ -240,7 +248,8 @@ class AttnRanges:
 
         if attn_range.is_subrange_of(target_range):
             start = prefix_offset[le_idx] + attn_range.start - target_range.start
-            return AttnRange(start=start, end=start + attn_range.size)
+            local_range = AttnRange(start=start, end=start + attn_range.size)
+            return local_range
         else:
             raise ValueError(
                 f"The attn_range {attn_range} is not in the (even merged) attn_ranges {merged_ranges}"
