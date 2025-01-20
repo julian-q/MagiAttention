@@ -39,7 +39,6 @@ class TestDistFlashAttn(DistTestBase):
             num_heads=1,
             head_dim=128,
             dtype=torch.bfloat16,
-            device=torch.cuda.current_device(),
             overlap_degree=1,
             deterministic=False,
         )
