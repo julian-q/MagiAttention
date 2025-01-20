@@ -95,7 +95,7 @@ class GroundTruthDispatcher(nn.Module):
                     q_range=q_range.offset(chunk_start),
                     k_range=k_range,
                     mask_type=mask_type,
-                    area=chunk_mask.compute_sub_area(
+                    area=chunk_mask.calc_sub_area(
                         q_range=q_range,
                         k_range=k_range,
                     ),

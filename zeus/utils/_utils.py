@@ -1,5 +1,4 @@
 import os
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Any, Callable, List, Sequence, Tuple, TypeAlias, Union
 
 import matplotlib.pyplot as plt
@@ -72,21 +71,15 @@ def flatten_nested_list(nested_list: NestedIntList) -> List[int]:
 
 
 def perm_idxs2unperm_idxs(perm_idxs: List[int]) -> List[int]:
+    if not perm_idxs:
+        return []
+
     unperm_idxs = [0] * len(perm_idxs)
 
     for i in range(len(perm_idxs)):
         unperm_idxs[perm_idxs[i]] = i
 
     return unperm_idxs
-
-
-def run_with_timeout(func: Callable, timeout_sec: int | None = None) -> Any:
-    with ThreadPoolExecutor() as executor:
-        future = executor.submit(func)
-        try:
-            return future.result(timeout=timeout_sec)
-        except TimeoutError as e:
-            raise e
 
 
 def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> List[Any]:
@@ -96,12 +89,30 @@ def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> List[Any]:
         return [x] * broadcast_to_length
 
 
-def is_list_all(_list: List[Any], val: Any = None, just_same: bool = False) -> bool:
+def is_list_value_all(
+    _list: list[Any], val: Any = None, just_same: bool = False
+) -> bool:
+    if not _list:
+        return False
+
     if just_same:
         assert val is None, "val should be None when just_same is True"
         val = _list[0]
 
     return all(x == val for x in _list)
+
+
+def is_list_type_all(
+    _list: list[Any], _type: Any = None, just_same: bool = False
+) -> bool:
+    if not _list:
+        return False
+
+    if just_same:
+        assert _type is None, "_type should be None when just_same is True"
+        _type = type(_list[0])
+
+    return all(isinstance(x, _type) for x in _list)
 
 
 def repr_matrix(matrix: np.ndarray) -> str:
@@ -158,25 +169,3 @@ def vis_matrix(
 
     if save_path is not None:
         plt.savefig(save_path)
-
-
-def make_causal_mask(
-    seqlen_q: int,
-    seqlen_k: int,
-    align: str = "bottom-right",
-    dtype=torch.int32,
-    device: str = "cpu",
-) -> torch.Tensor:
-    max_seqlen = max(seqlen_q, seqlen_k)
-    causal_mask = torch.tril(torch.ones((max_seqlen, max_seqlen))).to(
-        dtype=dtype, device=device
-    )
-
-    if align == "bottom-right":
-        causal_mask = causal_mask[-seqlen_q:, -seqlen_k:]
-    elif align == "top-left":
-        causal_mask = causal_mask[:seqlen_q, :seqlen_k]
-    else:
-        raise ValueError(f"Invalid alignment: {align}")
-
-    return causal_mask

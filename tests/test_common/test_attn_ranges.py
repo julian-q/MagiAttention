@@ -1,10 +1,10 @@
 import unittest
 from unittest import TestCase
 
-from zeus.common.ranges import AttnRange, AttnRanges
+from zeus.common.ranges import AttnRange, AttnRanges, is_valid_cu_seqlens
 
 
-class TestFindHoleRanges(TestCase):
+class TestAttnRanges(TestCase):
     def test_make_ranges_local(self):
         ranges = AttnRanges.from_ranges([(0, 10), (20, 30), (30, 35), (40, 50)])
         other_ranges = AttnRanges.from_ranges([(2, 8), (25, 32), (42, 45)])
@@ -220,6 +220,28 @@ class TestFindHoleRanges(TestCase):
         merged_ranges = ranges.merge()
         self.assertEqual(merged_ranges, AttnRanges.from_ranges([(0, 35), (40, 50)]))
         self.assertTrue(merged_ranges.is_merged())
+
+    def test_is_valid_cu_seqlens(self):
+        # NOTE: this test func also tests 'check_valid_cu_seqlens' implicitly
+
+        # ---------    empty cu_seqlens always True     --------- #
+        self.assertTrue(is_valid_cu_seqlens([], 0))
+        self.assertTrue(is_valid_cu_seqlens([], 5))
+
+        # ---------    valid cu_seqlens     --------- #
+        self.assertTrue(is_valid_cu_seqlens([0, 23, 49, 58, 89], 89))
+        self.assertTrue(is_valid_cu_seqlens([0, 89], 89))
+        self.assertTrue(is_valid_cu_seqlens([0], 0))
+
+        # ---------    invalid cu_seqlens w/o starting from 0     --------- #
+        self.assertFalse(is_valid_cu_seqlens([23, 49, 58, 89], 89))
+
+        # ---------    invalid cu_seqlens w/o monotonically increasing     --------- #
+        self.assertFalse(is_valid_cu_seqlens([0, 50, 49, 58, 89], 89))
+        self.assertFalse(is_valid_cu_seqlens([0, 49, 49, 58, 89], 89))
+
+        # ---------    invalid cu_seqlens w/o ending at seq_len     --------- #
+        self.assertFalse(is_valid_cu_seqlens([0, 23, 49, 58, 89], 90))
 
 
 if __name__ == "__main__":

@@ -5,10 +5,33 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ..utils import make_causal_mask, repr_matrix, vis_matrix
+from zeus.utils import is_list_value_all, repr_matrix, vis_matrix
+
 from .enum import AttnMaskType
 from .range import AttnRange
 from .ranges import AttnRanges
+
+
+def make_causal_mask(
+    seqlen_q: int,
+    seqlen_k: int,
+    align: str = "bottom-right",
+    dtype=torch.int32,
+    device: str = "cpu",
+) -> torch.Tensor:
+    max_seqlen = max(seqlen_q, seqlen_k)
+    causal_mask = torch.tril(torch.ones((max_seqlen, max_seqlen))).to(
+        dtype=dtype, device=device
+    )
+
+    if align == "bottom-right":
+        causal_mask = causal_mask[-seqlen_q:, -seqlen_k:]
+    elif align == "top-left":
+        causal_mask = causal_mask[:seqlen_q, :seqlen_k]
+    else:
+        raise ValueError(f"Invalid alignment: {align}")
+
+    return causal_mask
 
 
 class AttnMask(nn.Module):
@@ -286,7 +309,7 @@ class AttnMask(nn.Module):
             k_range.end <= self.total_seqlen_k
         ), f"The {k_range.end=} should be no greater than {self.total_seqlen_k=}"  # noqa
 
-    def compute_sub_area(
+    def calc_sub_area(
         self,
         q_range: AttnRange,
         k_range: AttnRange,
@@ -352,6 +375,20 @@ class AttnMask(nn.Module):
             ).all()
 
         return self._is_pure_causal  # type: ignore
+
+    def is_varlen_full(self) -> bool:
+        return (
+            is_list_value_all(self.attn_mask_type, AttnMaskType.FULL)
+            and self.q_ranges.is_cu_seqlens(self.total_seqlen_q)
+            and self.k_ranges.is_cu_seqlens(self.total_seqlen_k)
+        )
+
+    def is_varlen_causal(self) -> bool:
+        return (
+            is_list_value_all(self.attn_mask_type, AttnMaskType.CAUSAL)
+            and self.q_ranges.is_cu_seqlens(self.total_seqlen_q)
+            and self.k_ranges.is_cu_seqlens(self.total_seqlen_k)
+        )
 
     def is_empty(self) -> bool:
         if self._is_empty is None:

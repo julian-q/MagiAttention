@@ -7,6 +7,7 @@ from zeus.common import AttnRanges
 from zeus.common.enum import AttnMaskType
 from zeus.functional import dispatch_func, undispatch_func
 from zeus.meta.solver import calc_dispatch_meta_from_qk_ranges
+from zeus.meta.solver._calc_dispatch_meta import cu_seqlens2seqlens, seqlens2cu_seqlens
 from zeus.testing.dist_common import DistTestBase, with_comms
 
 WORLD_SIZE = 4
@@ -132,6 +133,70 @@ class TestDispatcher(DistTestBase):
 
         assert torch.equal(global_q_und, global_q)
         assert torch.equal(global_k_und, global_k)
+
+    def test_seqlens2cu_seqlens(self):
+        # ---------    multi-elem seqlens    --------- #
+
+        self.assertEqual(
+            seqlens2cu_seqlens([5, 4, 3, 2, 1]),
+            [0, 5, 9, 12, 14, 15],
+        )
+
+        # ---------    single-elem seqlens    --------- #
+
+        self.assertEqual(
+            seqlens2cu_seqlens([12]),
+            [0, 12],
+        )
+
+        # ---------    empty seqlens    --------- #
+
+        self.assertEqual(
+            seqlens2cu_seqlens([0]),
+            [0, 0],
+        )
+
+        self.assertEqual(
+            seqlens2cu_seqlens([0, 0]),
+            [0, 0, 0],
+        )
+
+        self.assertEqual(
+            seqlens2cu_seqlens([]),
+            [0],
+        )
+
+    def test_cu_seqlens2seqlens(self):
+        # ---------    multi-elem cu_seqlens    --------- #
+
+        self.assertEqual(
+            cu_seqlens2seqlens([0, 5, 9, 12, 14, 15]),
+            [5, 4, 3, 2, 1],
+        )
+
+        # ---------    single-elem cu_seqlens    --------- #
+
+        self.assertEqual(
+            cu_seqlens2seqlens([0, 12]),
+            [12],
+        )
+
+        # ---------    empty cu_seqlens    --------- #
+
+        self.assertEqual(
+            cu_seqlens2seqlens([0, 0]),
+            [0],
+        )
+
+        self.assertEqual(
+            cu_seqlens2seqlens([0]),
+            [],
+        )
+
+        self.assertEqual(
+            cu_seqlens2seqlens([]),
+            [],
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,11 @@ from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
 from zeus.comm.primitive import group_cast_collective, group_reduce_collective
+from zeus.comm.primitive._all_gather_v import (
+    _get_dims_as_trans_with_dim0,
+    _trans_with_dim0,
+)
+from zeus.comm.primitive._group_collective import unpermute_tensor
 from zeus.testing.dist_common import DistTestBase, with_comms
 
 
@@ -176,6 +181,174 @@ class TestMultiCastCollective(DistTestBase):
         work.wait()
         output_tensor = post_process_fn(output_tensor)
         assert torch.equal(output_tensor, expected_tensor)
+
+    def test_trans_with_dim0(self):
+        # ---------    high-dim tensor     --------- #
+
+        x = torch.arange(2 * 3 * 4).reshape(2, 3, 4).contiguous()
+
+        y0 = _trans_with_dim0(x, dim=0)
+        y0_ = _trans_with_dim0(x, dim=-3)
+        self.assertTrue(y0.is_contiguous())
+        self.assertTrue(torch.equal(y0, x))
+        self.assertTrue(torch.equal(y0_, y0))
+        self.assertTrue(y0.data_ptr() == x.data_ptr())  # same storage
+
+        y1 = _trans_with_dim0(x, dim=1)
+        y1_ = _trans_with_dim0(x, dim=-2)
+        self.assertTrue(y1.is_contiguous())
+        self.assertTrue(torch.equal(y1, x.transpose(0, 1)))
+        self.assertTrue(torch.equal(y1_, y1))
+        self.assertFalse(y1.data_ptr() == x.data_ptr())  # different storage
+
+        y2 = _trans_with_dim0(x, dim=2)
+        y2_ = _trans_with_dim0(x, dim=-1)
+        self.assertTrue(y2.is_contiguous())
+        self.assertTrue(torch.equal(y2, x.transpose(0, 2)))
+        self.assertTrue(torch.equal(y2_, y2))
+        self.assertFalse(y2.data_ptr() == x.data_ptr())  # different storage
+
+        # ---------    1-dim tensor     --------- #
+
+        x = torch.arange(
+            12,
+        )
+
+        y0 = _trans_with_dim0(x, dim=0)
+        self.assertTrue(y0.is_contiguous())
+        self.assertTrue(torch.equal(y0, x))
+        self.assertTrue(y0.data_ptr() == x.data_ptr())  # same storage
+
+        y1 = _trans_with_dim0(x, dim=-1)
+        self.assertTrue(y1.is_contiguous())
+        self.assertTrue(torch.equal(y1, x))
+        self.assertTrue(y1.data_ptr() == x.data_ptr())  # same storage
+
+    def test_get_dims_as_trans_with_dim0(self):
+        # ---------    high-dim shape     --------- #
+
+        x_shape = [2, 3, 4, 5]
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=0)
+        self.assertEqual(this_dim, 2)
+        self.assertEqual(other_dims, [3, 4, 5])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=1)
+        self.assertEqual(this_dim, 3)
+        self.assertEqual(other_dims, [2, 4, 5])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=2)
+        self.assertEqual(this_dim, 4)
+        self.assertEqual(other_dims, [3, 2, 5])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=3)
+        this_dim_, other_dims_ = _get_dims_as_trans_with_dim0(x_shape, dim=-1)
+        self.assertEqual(this_dim, 5)
+        self.assertEqual(other_dims, [3, 4, 2])
+        self.assertEqual(this_dim_, this_dim)
+        self.assertEqual(other_dims_, other_dims)
+
+        # ---------    1-dim shape     --------- #
+
+        x_shape = [12]
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=0)
+        self.assertEqual(this_dim, 12)
+        self.assertEqual(other_dims, [])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=-1)
+        self.assertEqual(this_dim, 12)
+        self.assertEqual(other_dims, [])
+
+        # ---------    invalid dim     --------- #
+
+        x_shape = [2, 3, 4]
+
+        with self.assertRaises(
+            AssertionError,
+            msg="dim should be in [0, len(x_shape) - 1) or -1",
+        ):
+            _get_dims_as_trans_with_dim0(x_shape, dim=4)
+
+        with self.assertRaises(
+            AssertionError,
+            msg="dim should be in [0, len(x_shape) - 1) or -1",
+        ):
+            _get_dims_as_trans_with_dim0(x_shape, dim=-2)
+
+    def test_unpermute_tensor(self):
+        # NOTE: this test func also tests 'safe_cat' implicitly
+
+        # ---------    normal unperm idxs     --------- #
+        x = torch.randn(6, 3, 4)
+
+        unperm_idxs1 = [0, 2, 1]
+        split_sizes1 = [2, 1, 3]
+        y1 = unpermute_tensor(
+            x, unpermute_index_list=unperm_idxs1, tensor_size_list=split_sizes1
+        )
+        self.assertTrue(y1.is_contiguous())
+        self.assertTrue(
+            torch.equal(
+                y1,
+                torch.cat(
+                    [  # split_sizes_after_unperm = (2,3,1)
+                        x[:2],
+                        x[-3:],
+                        x[2:3],
+                    ]
+                ),
+            )
+        )
+
+        unperm_idxs2 = [2, 1, 0]
+        split_sizes2 = [2, 3, 1]
+        y2 = unpermute_tensor(
+            x, unpermute_index_list=unperm_idxs2, tensor_size_list=split_sizes2
+        )
+        self.assertTrue(y2.is_contiguous())
+        self.assertTrue(
+            torch.equal(
+                y2,
+                torch.cat(
+                    [  # split_sizes_after_unperm = (1,3,2)
+                        x[-1:],
+                        x[2:-1],
+                        x[:2],
+                    ]
+                ),
+            )
+        )
+
+        unperm_idxs3 = [2, 0, 1]
+        split_sizes3 = [3, 1, 2]
+        y3 = unpermute_tensor(
+            x, unpermute_index_list=unperm_idxs3, tensor_size_list=split_sizes3
+        )
+        self.assertTrue(y3.is_contiguous())
+        self.assertTrue(
+            torch.equal(
+                y3,
+                torch.cat(
+                    [  # split_sizes_after_unperm = (2,3,1)
+                        x[-2:],
+                        x[:3],
+                        x[3:4],
+                    ]
+                ),
+            )
+        )
+
+        # ---------    empty unperm idxs     --------- #
+
+        x = torch.randn(6, 3, 4)
+        torch.manual_seed(42)
+        emp = torch.empty(0, 3, 4)
+
+        torch.manual_seed(42)
+        y = unpermute_tensor(x, unpermute_index_list=[], tensor_size_list=[1, 2, 3])
+        self.assertTrue(y.is_contiguous())
+        self.assertTrue(torch.equal(y, emp))
 
 
 if __name__ == "__main__":

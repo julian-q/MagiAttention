@@ -63,7 +63,7 @@ class DispatchMeta:
         assert (
             len(self.partitions_perm_idxs)
             == len(self.partitions_unperm_idxs)
-            == self.cp_size
+            == self.num_chunks
         )
         assert len(self.buckets_per_rank) == self.cp_size
         assert len(self.host_ranges_per_rank) == self.cp_size

@@ -6,7 +6,7 @@ from zeus.meta.collection import DispatchMeta
 from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
 from zeus.utils import (
     flatten_nested_list,
-    is_list_all,
+    is_list_value_all,
     nvtx,
     perm_idxs2unperm_idxs,
     wrap_to_list,
@@ -110,7 +110,7 @@ def calc_dispatch_meta_from_qk_ranges(
     )
 
     # TODO: limited to all full attn masks for now
-    assert is_list_all(
+    assert is_list_value_all(
         attn_mask_type, AttnMaskType.FULL
     ), "Only supports all full attn mask for now."
 
@@ -348,7 +348,7 @@ def _calc_self_attn_areas(
     # --------------      pre-check args       -------------- #
 
     # TODO: limited to all full attn masks for now
-    assert is_list_all(attn_mask_type, just_same=True), (
+    assert is_list_value_all(attn_mask_type, just_same=True), (
         "Only supports either all full attn masks " "or all causal attn masks for now."
     )
 

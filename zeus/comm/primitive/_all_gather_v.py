@@ -15,7 +15,7 @@ def _trans_with_dim0(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
     return x
 
 
-def _check_dim_and_get_dims_when_trans_with_dim0(
+def _get_dims_as_trans_with_dim0(
     x_shape: List[int],
     dim: int = 0,
 ) -> Tuple[int, List[int]]:
@@ -60,9 +60,7 @@ def all_gather_v(
 
     rank, world_size = dist.get_rank(group), dist.get_world_size(group)
     x_local_shape = list(x_local.shape)
-    this_dim, other_dims = _check_dim_and_get_dims_when_trans_with_dim0(
-        x_local_shape, dim
-    )
+    this_dim, other_dims = _get_dims_as_trans_with_dim0(x_local_shape, dim)
 
     x_local = _trans_with_dim0(x_local, dim)
 
