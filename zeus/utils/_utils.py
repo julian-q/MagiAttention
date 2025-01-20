@@ -18,6 +18,7 @@ def setup_dist_env(
     """
     rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    torch.cuda.set_device(rank)
 
     dist.init_process_group(
         backend="nccl",

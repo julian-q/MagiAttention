@@ -1,3 +1,4 @@
+import datetime
 from functools import wraps
 from typing import Any, Callable, Dict, Tuple
 
@@ -45,6 +46,7 @@ class DistTestBase(MultiProcessTestCase):
             world_size=self.world_size,
             rank=self.rank,
             init_method=f"file://{self.file_name}",  # noqa
+            timeout=datetime.timedelta(minutes=30),
         )
 
         # set device for nccl pg for collectives

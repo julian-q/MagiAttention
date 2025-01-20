@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 import torch
 import torch.distributed
 import torch.distributed as dist
@@ -10,15 +8,12 @@ from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
 from zeus.functional.dist_attn import (
-    AttnArg,
-    AttnCalcMeta,
-    DispatchMeta,
     DistFlashAttn,
     DistFlashAttnConfig,
     DistFlashAttnRuntime,
-    DistFlashAttnRuntimeMeta,
-    GroupCastCollectiveArg,
 )
+from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
+from zeus.meta.collection.comm_meta import CommMeta, GroupCastCollectiveArg
 from zeus.testing.dist_common import DistTestBase, with_comms
 
 
@@ -46,38 +41,31 @@ class TestDistFlashAttn(DistTestBase):
             dtype=torch.bfloat16,
             device=torch.cuda.current_device(),
             overlap_degree=1,
+            deterministic=False,
         )
         dist_attn = DistFlashAttn(attn_config)
 
         attn_calc_meta = AttnCalcMeta(
             local_attn_arg=AttnArg(
-                q_ranges=torch.tensor([[0, 128]], device=device, dtype=torch.int32),
-                k_ranges=torch.tensor([[0, 128]], device=device, dtype=torch.int32),
-                is_causal_mapping=torch.tensor(
-                    [False], device=device, dtype=torch.bool
-                ),
+                q_ranges=[[0, 128]],
+                k_ranges=[[0, 128]],
+                is_causal_mapping=[False],
                 max_seqlen_q=128,
                 max_seqlen_k=128,
             ),
             remote_attn_args_list=[
                 AttnArg(
-                    q_ranges=torch.tensor([[0, 128]], device=device, dtype=torch.int32),
-                    k_ranges=torch.tensor(
-                        [[0, 128 * 3]], device=device, dtype=torch.int32
-                    ),
-                    is_causal_mapping=torch.tensor(
-                        [False], device=device, dtype=torch.bool
-                    ),
+                    q_ranges=[[0, 128]],
+                    k_ranges=[[0, 128 * 3]],
+                    is_causal_mapping=[False],
                     max_seqlen_q=128,
                     max_seqlen_k=128 * 3,
                 ),
             ],
-            deterministic=False,
         )
 
-        q_dispatch_meta = DispatchMeta(
-            num_remote_tokens=128 * 3,
-            split_size_list=[128 * 3],
+        comm_meta = CommMeta(
+            num_remote_tokens_per_overlap_stage=[128 * 3],
             group_cast_collective_args_list=[
                 GroupCastCollectiveArg(
                     input_split_size_list=[128],
@@ -88,22 +76,14 @@ class TestDistFlashAttn(DistTestBase):
                     src_index_list=[
                         rank for rank in range(self.world_size) if rank != self.rank
                     ],
-                ),
+                )
             ],
         )
 
-        kv_dispatch_meta = deepcopy(q_dispatch_meta)
-
-        dist_attn_runtime_meta = DistFlashAttnRuntimeMeta(
-            context_parallel_group=self.process_group,
-            attn_calc_meta=attn_calc_meta,
-            q_dispatch_meta=q_dispatch_meta,
-            kv_dispatch_meta=kv_dispatch_meta,
-        )
-
         dist_attn_runtime = DistFlashAttnRuntime(
-            runtime_meta=dist_attn_runtime_meta,
-            config=attn_config,
+            comm_meta=comm_meta,
+            calc_meta=attn_calc_meta,
+            cp_group_nccl=self.process_group,
         )
 
         local_q = torch.randn(

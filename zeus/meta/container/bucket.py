@@ -1,17 +1,17 @@
 # mypy: ignore-errors
 from dataclasses import dataclass, field
-from typing import List
 
 from zeus.common.ranges import AttnRanges
 
 from .chunk import AttnChunk
+from .slice import AttnSlice
 
 
 @dataclass(repr=False)
 class AttnBucket:
     cp_rank: int | None = None
 
-    q_chunks: List[AttnChunk] = field(default_factory=list)
+    q_chunks: list[AttnChunk] = field(default_factory=list)
 
     @property
     def q_ranges(self) -> AttnRanges:
@@ -28,11 +28,18 @@ class AttnBucket:
         return k_ranges
 
     @property
+    def attn_slices(self) -> list[AttnSlice]:
+        _attn_slices = []
+        for chunk in self.q_chunks:
+            _attn_slices.extend(chunk.attn_slices)
+        return _attn_slices
+
+    @property
     def area(self) -> int:
         return sum(chunk.area for chunk in self.q_chunks)
 
     @property
-    def areas(self) -> List[int]:
+    def areas(self) -> list[int]:
         return [chunk.area for chunk in self.q_chunks]
 
     def __repr__(self, indent: str = "") -> str:

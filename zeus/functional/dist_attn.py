@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Callable, Optional
 
@@ -8,6 +8,8 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from flash_attn_interface import _flex_flash_attn_backward, _flex_flash_attn_forward
 from torch.distributed import Work
+
+from zeus.meta.collection import AttnCalcMeta, CommMeta
 
 from ..comm.primitive import group_cast_collective, group_reduce_collective
 
@@ -23,102 +25,9 @@ class DistFlashAttnConfig:
     num_heads: int
     head_dim: int
     dtype: torch.dtype
-    device: torch.device
-
+    deterministic: bool = False
     # REVIEW(xiaowu): overlap_degree应该是静态的嘛？
     overlap_degree: int = 1
-
-
-@dataclass
-class AttnArg:
-    q_ranges: torch.Tensor
-    k_ranges: torch.Tensor
-    is_causal_mapping: torch.Tensor
-    max_seqlen_q: int
-    max_seqlen_k: int
-
-    # 用户不应该设置以下变量, 这些变量是__post_init__自动生成的
-    q_ranges_list: list[list[int]] = None  # type: ignore
-    k_ranges_list: list[list[int]] = None  # type: ignore
-    is_causal_mapping_list: list[bool] = None  # type: ignore
-    skip_attn: bool = None  # type: ignore
-
-    def __post_init__(self):
-        # shape check
-        batch_size = self.q_ranges.shape[0]
-        assert self.q_ranges.shape == torch.Size(
-            [batch_size, 2]
-        ), f"{self.q_ranges.shape=}"
-        assert self.k_ranges.shape == torch.Size(
-            [batch_size, 2]
-        ), f"{self.k_ranges.shape=}"
-        assert self.is_causal_mapping.shape == torch.Size(
-            [batch_size]
-        ), f"{self.is_causal_mapping.shape=}"
-
-        # 推导需要使用的变量
-        self.q_ranges_list = self.q_ranges.tolist()
-        self.k_ranges_list = self.k_ranges.tolist()
-        self.is_causal_mapping_list = self.is_causal_mapping.tolist()
-
-        # 检查每一个k_ranges_list中的k_ranges的left < right
-        for k_ranges in self.k_ranges_list:
-            assert k_ranges[0] < k_ranges[1]
-
-        if batch_size == 0:
-            self.skip_attn = True
-        else:
-            self.skip_attn = False
-
-    def to_ffa_args(self) -> dict:
-        return {
-            "q_ranges": self.q_ranges,
-            "k_ranges": self.k_ranges,
-            "is_causal_mapping": self.is_causal_mapping,
-            "max_seqlen_q": self.max_seqlen_q,
-            "max_seqlen_k": self.max_seqlen_k,
-        }
-
-
-@dataclass
-class AttnCalcMeta:
-    local_attn_arg: AttnArg
-    remote_attn_args_list: list[AttnArg]
-    deterministic: bool
-
-
-@dataclass
-class GroupCastCollectiveArg:
-    input_split_size_list: list[int]
-    output_split_size_list: list[int]
-    dst_indices_list: list[list[int]]
-    src_index_list: list[int]
-
-
-@dataclass
-class DispatchMeta:
-    num_remote_tokens: int
-    split_size_list: list[int] = field(
-        metadata={"help": "num tokens per overlap stage"}
-    )
-    group_cast_collective_args_list: list[GroupCastCollectiveArg]
-
-
-@dataclass
-class DistFlashAttnRuntimeMeta:
-    """
-    分布式Flash Attention的运行时元数据类。
-
-    Args:
-        attn_calc_meta (AttnCalcMeta): 注意力计算相关的元数据
-        q_dispatch_meta (DispatchMeta): query张量的分发相关元数据
-        kv_dispatch_meta (DispatchMeta): key/value张量的分发相关元数据
-    """
-
-    context_parallel_group: dist.ProcessGroup
-    attn_calc_meta: AttnCalcMeta
-    q_dispatch_meta: DispatchMeta
-    kv_dispatch_meta: DispatchMeta
 
 
 class DistFlashAttnRuntime:
@@ -144,10 +53,14 @@ class DistFlashAttnRuntime:
     """
 
     def __init__(
-        self, runtime_meta: DistFlashAttnRuntimeMeta, config: DistFlashAttnConfig
+        self,
+        comm_meta: CommMeta,
+        calc_meta: AttnCalcMeta,
+        cp_group_nccl: dist.ProcessGroup,
     ):
-        self.runtime_meta = runtime_meta
-        self.config = config
+        self.comm_meta = comm_meta
+        self.calc_meta = calc_meta
+        self.cp_group_nccl = cp_group_nccl
 
     def fetch_remote_kv(
         self, k: torch.Tensor, v: torch.Tensor, overlap_stage: int
@@ -170,27 +83,33 @@ class DistFlashAttnRuntime:
             remote_kv_post_process_fn(Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor]]): 通信后处理函数
 
         Shape:
-            - k: [num_tokens_k_local, num_heads, head_dim]
-            - v: [num_tokens_v_local, num_heads, head_dim]
+            - k: [num_tokens_kv_local, num_heads, head_dim]
+            - v: [num_tokens_kv_local, num_heads, head_dim]
             - remote_kv_buffer: [num_tokens_k_remote_i + num_tokens_v_remote_i, num_heads, head_dim],
                 i = 0, 1, ..., overlap_degree - 1
         """
 
+        _, num_heads, head_dim = k.shape
+        dtype = k.dtype
+        device = k.device
+
         remote_kv_buffer = torch.empty(
             [
-                self.runtime_meta.kv_dispatch_meta.num_remote_tokens * 2,
-                self.config.num_heads,
-                self.config.head_dim,
+                self.comm_meta.num_remote_tokens_per_overlap_stage[overlap_stage] * 2,
+                num_heads,
+                head_dim,
             ],
-            dtype=self.config.dtype,
-            device=self.config.device,
+            dtype=dtype,
+            device=device,
         )
 
-        group_cast_collective_args = (
-            self.runtime_meta.kv_dispatch_meta.group_cast_collective_args_list[
-                overlap_stage
-            ]
+        logger.debug(
+            f"RANK: {dist.get_rank()}, {remote_kv_buffer.shape=}, {k.shape=}, {v.shape=}"
         )
+
+        group_cast_collective_args = self.comm_meta.group_cast_collective_args_list[
+            overlap_stage
+        ]
 
         local_kv = torch.cat([k, v], dim=0)
 
@@ -202,7 +121,7 @@ class DistFlashAttnRuntime:
             * 2,
             dst_indices_list=group_cast_collective_args.dst_indices_list * 2,
             src_index_list=group_cast_collective_args.src_index_list * 2,
-            group=self.runtime_meta.context_parallel_group,
+            group=self.cp_group_nccl,
             async_op=True,
         )
 
@@ -223,6 +142,7 @@ class DistFlashAttnRuntime:
         k: torch.Tensor,
         v: torch.Tensor,
         overlap_stage: Optional[int] = None,
+        deterministic: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         计算attn结果的一部分
@@ -248,11 +168,17 @@ class DistFlashAttnRuntime:
         """
 
         if overlap_stage is None:
-            attn_arg = self.runtime_meta.attn_calc_meta.local_attn_arg
+            attn_arg = self.calc_meta.local_attn_arg
         else:
-            attn_arg = self.runtime_meta.attn_calc_meta.remote_attn_args_list[
-                overlap_stage
-            ]
+            attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
+
+        logger.debug(
+            f"RANK: {dist.get_rank()}, {q.shape=}, {k.shape=}, {v.shape=}, {q.device=}, {k.device=}, {v.device=}"
+        )
+        logger.debug(
+            f"RANK: {dist.get_rank()}, {attn_arg.q_ranges=}, {attn_arg.k_ranges=}, "
+            f"{attn_arg.is_causal_mapping=}, {attn_arg.max_seqlen_q=}, {attn_arg.max_seqlen_k=}, {attn_arg.skip_attn=}"
+        )
 
         # 计算attn
         if attn_arg.skip_attn:
@@ -272,12 +198,12 @@ class DistFlashAttnRuntime:
                 v=v,
                 **attn_arg.to_ffa_args(),
                 softmax_scale=q.shape[-1] ** (-0.5),
-                deterministic=self.runtime_meta.attn_calc_meta.deterministic,
+                deterministic=deterministic,
             )
 
             # TODO(xiaowu): opt performance
             start, end = 0, q.size(0)
-            for q_range in attn_arg.q_ranges_list:
+            for q_range in attn_arg.q_ranges:
                 if q_range[0] > start:
                     out[start : q_range[0]] = 0
                 start = q_range[1]
@@ -290,6 +216,7 @@ class DistFlashAttnRuntime:
         self,
         out_list: list[torch.Tensor],
         lse_list: list[torch.Tensor],
+        overlap_degree: int = 1,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         对attn结果进行correction
@@ -307,12 +234,12 @@ class DistFlashAttnRuntime:
             - lse: [num_heads, num_tokens_q]
         """
         # 当overlap_degree为1时, 也至少有2个lse和out, 一个是local的, 一个是remote的
-        assert len(out_list) == len(lse_list) == self.config.overlap_degree + 1
+        assert len(out_list) == len(lse_list) == overlap_degree + 1
 
         curr_lse = None
         curr_out = None
 
-        for i in range(self.config.overlap_degree):
+        for i in range(overlap_degree):
             if i == 0:
                 curr_lse = self.correct_attn_lse(lse_list[0], lse_list[1])
                 curr_out = self.correct_attn_output(
@@ -341,13 +268,12 @@ class DistFlashAttnRuntime:
         o: torch.Tensor,
         lse: torch.Tensor,
         overlap_stage: Optional[int] = None,
+        deterministic: bool = False,
     ):
         if overlap_stage is None:
-            attn_arg = self.runtime_meta.attn_calc_meta.local_attn_arg
+            attn_arg = self.calc_meta.local_attn_arg
         else:
-            attn_arg = self.runtime_meta.attn_calc_meta.remote_attn_args_list[
-                overlap_stage
-            ]
+            attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
 
         partial_dq, partial_dk, partial_dv = (
             torch.zeros_like(q),  # WTFFFFF???
@@ -371,7 +297,7 @@ class DistFlashAttnRuntime:
                 dv=partial_dv,
                 **attn_arg.to_ffa_args(),
                 softmax_scale=q.shape[-1] ** (-0.5),
-                deterministic=self.runtime_meta.attn_calc_meta.deterministic,
+                deterministic=deterministic,
             )
 
         return partial_dq, partial_dk, partial_dv
@@ -384,11 +310,9 @@ class DistFlashAttnRuntime:
         partial_local_dv: torch.Tensor,
         overlap_stage: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        group_cast_collective_args = (
-            self.runtime_meta.kv_dispatch_meta.group_cast_collective_args_list[
-                overlap_stage
-            ]
-        )
+        group_cast_collective_args = self.comm_meta.group_cast_collective_args_list[
+            overlap_stage
+        ]
 
         (
             partial_local_dk_work,
@@ -400,7 +324,7 @@ class DistFlashAttnRuntime:
             output_split_size_list=group_cast_collective_args.input_split_size_list,
             dst_index_list=group_cast_collective_args.src_index_list,
             src_indices_list=group_cast_collective_args.dst_indices_list,
-            group=self.runtime_meta.context_parallel_group,
+            group=self.cp_group_nccl,
             async_op=True,
         )
 
@@ -414,7 +338,7 @@ class DistFlashAttnRuntime:
             output_split_size_list=group_cast_collective_args.input_split_size_list,
             dst_index_list=group_cast_collective_args.src_index_list,
             src_indices_list=group_cast_collective_args.dst_indices_list,
-            group=self.runtime_meta.context_parallel_group,
+            group=self.cp_group_nccl,
             async_op=True,
         )
 
@@ -519,6 +443,15 @@ class DistFlashAttnRuntime:
 
         return o.to(o1.dtype)
 
+    @classmethod
+    def from_attn_meta(
+        cls,
+        comm_meta: CommMeta,
+        calc_meta: AttnCalcMeta,
+        cp_group_nccl: dist.ProcessGroup,
+    ):
+        return cls(comm_meta, calc_meta, cp_group_nccl)
+
 
 class DistFlashAttnFunc(torch.autograd.Function):
     @staticmethod
@@ -568,6 +501,8 @@ class DistFlashAttnFunc(torch.autograd.Function):
             q=local_q,
             k=local_k,
             v=local_v,
+            overlap_stage=None,
+            deterministic=dist_attn_config.deterministic,
         )
         out_list.append(out)
         lse_list.append(lse)
@@ -593,7 +528,11 @@ class DistFlashAttnFunc(torch.autograd.Function):
             # Do attn with remote kv #
             ##########################
             out, lse = dist_attn_runtime.attn_fwd_partial(
-                q=local_q, k=curr_remote_k, v=curr_remote_v, overlap_stage=overlap_stage
+                q=local_q,
+                k=curr_remote_k,
+                v=curr_remote_v,
+                overlap_stage=overlap_stage,
+                deterministic=dist_attn_config.deterministic,
             )
 
             out_list.append(out)
@@ -605,6 +544,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
         out, final_lse = dist_attn_runtime.result_correction(
             out_list=out_list,
             lse_list=lse_list,
+            overlap_degree=dist_attn_config.overlap_degree,
         )
 
         ctx.save_for_backward(local_q, local_k, local_v, out, final_lse)
@@ -636,6 +576,8 @@ class DistFlashAttnFunc(torch.autograd.Function):
             v=local_v,
             o=out,
             lse=final_lse,
+            overlap_stage=None,
+            deterministic=dist_attn_config.deterministic,
         )
 
         for overlap_stage in range(dist_attn_config.overlap_degree):
@@ -664,6 +606,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
                 o=out,
                 lse=final_lse,
                 overlap_stage=overlap_stage,
+                deterministic=dist_attn_config.deterministic,
             )
 
             partial_local_dk, partial_local_dv = dist_attn_runtime.reduce_partial_dkv(

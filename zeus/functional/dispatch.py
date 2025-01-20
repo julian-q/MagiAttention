@@ -1,6 +1,6 @@
 import torch
 
-from zeus.comm.functional import all_gather_v_func
+from zeus.comm.functional import all_gather_fwd_scatter_bwd, scatter_fwd_all_gather_bwd
 from zeus.common.enum import AttnType
 from zeus.meta.collection import DispatchMeta
 from zeus.utils import nvtx
@@ -42,10 +42,11 @@ def dispatch_func(
         chunks=meta.num_chunks,
         dim=seq_dim,
     )
-    x_local = torch.concat(
-        [x_chunked[i] for i in meta.partitions[meta.cp_rank]],
+    x_perm = torch.concat(
+        [x_chunked[i] for i in meta.partitions_perm_idxs],
         dim=seq_dim,
     )
+    x_local = scatter_fwd_all_gather_bwd(x_perm, group=meta.cp_group_nccl, dim=0)
 
     return x_local
 
@@ -82,7 +83,7 @@ def undispatch_func(
 
     # --------------      all-gather-v       -------------- #
 
-    x_gather = all_gather_v_func(x_local, group=ag_group, dim=0)
+    x_gather = all_gather_fwd_scatter_bwd(x_local, group=ag_group, dim=0)
 
     # --------------      undispatch       -------------- #
 

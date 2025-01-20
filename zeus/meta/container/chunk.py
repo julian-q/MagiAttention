@@ -27,6 +27,10 @@ class AttnChunk:
         return k_ranges
 
     @property
+    def attn_slices(self) -> list[AttnSlice]:
+        return self.q_slices
+
+    @property
     def area(self) -> int:
         return sum(slice.area for slice in self.q_slices)
 
