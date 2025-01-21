@@ -1,5 +1,9 @@
 # Zeus(A super fast distributed attention solver)
 
+<div align="center">
+  <img src="./assets/zeus_logo.png" alt="Logo" width="1000">
+</div>
+
 
 ## Installation
 
@@ -42,4 +46,26 @@
     ```bash
     # install required packages
     pip install -r requirements.txt
+    ```
+
+### Step4: setup pre-commit (for developer only)
+
+* pre-commit:
+    ```bash
+    # after `pip install pre-commit` (done in step3)
+    # you need to set up the hooks for the first time
+    # which might take a while but only need to be done once
+    pre-commit install
+
+    # then each time before you run `git commit`
+    # please run the pre-commit to polish your code
+    pre-commit run -a
+
+    # if anything has been automatically fixed
+    # or required to be manually fixed by pre-commit
+    # please rerun `git add` to track the changes
+    # when everything is fixed and ready to be committed
+
+    # for more detailed information about pre-commit
+    # you can check: https://pre-commit.com/
     ```
