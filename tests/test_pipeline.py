@@ -16,6 +16,7 @@ from zeus.functional.dist_attn import (
     DistFlashAttnConfig,
     DistFlashAttnRuntime,
 )
+from zeus.meta.collection import CommMeta
 from zeus.meta.solver import (
     calc_attn_meta_from_dispatch_meta,
     calc_dispatch_meta_from_qk_ranges,
@@ -198,47 +199,12 @@ class TestPipeline(DistTestBase):
             overlap_degree=dist_attn_config.overlap_degree,
         )
 
-        # test group_cast和group_reduce的对称性
-        group_cast_collective_args = comm_meta.group_cast_collective_args_list[0]
-        input_ttk = sum(group_cast_collective_args.input_split_size_list)
-        test_input = (
-            torch.randn(input_ttk, device=device, dtype=torch.float32) * 10**self.rank
+        self.check_group_cast_and_group_reduce(
+            comm_meta=comm_meta,
+            device=device,
+            atol=atol,
+            rtol=rtol,
         )
-        output_ttk = sum(group_cast_collective_args.output_split_size_list)
-        test_output = torch.zeros(output_ttk, device=device, dtype=torch.float32)
-        ans = test_input
-        ans = list(torch.split(ans, group_cast_collective_args.input_split_size_list))
-        ans = torch.cat(
-            [
-                ans[i] * (1 + len(group_cast_collective_args.dst_indices_list[i]))
-                for i in range(len(group_cast_collective_args.dst_indices_list))
-            ]
-        )
-        work, post_process_fn = group_cast_collective(
-            input=test_input,
-            output=test_output,
-            input_split_size_list=group_cast_collective_args.input_split_size_list,
-            output_split_size_list=group_cast_collective_args.output_split_size_list,
-            dst_indices_list=group_cast_collective_args.dst_indices_list,
-            src_index_list=group_cast_collective_args.src_index_list,
-            group=self.process_group,
-            async_op=True,
-        )
-        work.wait()
-        test_output = post_process_fn(test_output)
-        work, post_process_fn = group_reduce_collective(
-            input=test_output,
-            output=test_input,
-            input_split_size_list=group_cast_collective_args.output_split_size_list,
-            output_split_size_list=group_cast_collective_args.input_split_size_list,
-            dst_index_list=group_cast_collective_args.src_index_list,
-            src_indices_list=group_cast_collective_args.dst_indices_list,
-            group=self.process_group,
-            async_op=True,
-        )
-        work.wait()
-        test_input = post_process_fn(test_input)
-        torch.testing.assert_close(test_input, ans, atol=atol, rtol=rtol)
 
         # test dist_attn
         dist_attn_runtime = DistFlashAttnRuntime.from_attn_meta(
@@ -416,6 +382,55 @@ class TestPipeline(DistTestBase):
             rtol=rtol,
             mismatch_threshold=0.03,
         )
+
+    def check_group_cast_and_group_reduce(
+        self,
+        comm_meta: CommMeta,
+        device: torch.device,
+        atol: float,
+        rtol: float,
+    ):
+        # test group_cast和group_reduce的对称性
+        group_cast_collective_args = comm_meta.group_cast_collective_args_list[0]
+        input_ttk = sum(group_cast_collective_args.input_split_size_list)
+        test_input = (
+            torch.randn(input_ttk, device=device, dtype=torch.float32) * 10**self.rank
+        )
+        output_ttk = sum(group_cast_collective_args.output_split_size_list)
+        test_output = torch.zeros(output_ttk, device=device, dtype=torch.float32)
+        ans = test_input
+        ans = list(torch.split(ans, group_cast_collective_args.input_split_size_list))
+        ans = torch.cat(
+            [
+                ans[i] * (1 + len(group_cast_collective_args.dst_indices_list[i]))
+                for i in range(len(group_cast_collective_args.dst_indices_list))
+            ]
+        )
+        work, post_process_fn = group_cast_collective(
+            input=test_input,
+            output=test_output,
+            input_split_size_list=group_cast_collective_args.input_split_size_list,
+            output_split_size_list=group_cast_collective_args.output_split_size_list,
+            dst_indices_list=group_cast_collective_args.dst_indices_list,
+            src_index_list=group_cast_collective_args.src_index_list,
+            group=self.process_group,
+            async_op=True,
+        )
+        work.wait()
+        test_output = post_process_fn(test_output)
+        work, post_process_fn = group_reduce_collective(
+            input=test_output,
+            output=test_input,
+            input_split_size_list=group_cast_collective_args.output_split_size_list,
+            output_split_size_list=group_cast_collective_args.input_split_size_list,
+            dst_index_list=group_cast_collective_args.src_index_list,
+            src_indices_list=group_cast_collective_args.dst_indices_list,
+            group=self.process_group,
+            async_op=True,
+        )
+        work.wait()
+        test_input = post_process_fn(test_input)
+        torch.testing.assert_close(test_input, ans, atol=atol, rtol=rtol)
 
 
 if __name__ == "__main__":
