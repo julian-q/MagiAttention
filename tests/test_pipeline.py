@@ -148,6 +148,25 @@ class TestPipeline(DistTestBase):
                 "total_seqlen_k": 17808,
                 "chunk_size": 1113,
             },
+            # full attn
+            {
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 2048],
+                        [2048, 12288],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 2048],
+                        [0, 2048],
+                    ]
+                ),
+                "is_causal_mapping": [False],
+                "total_seqlen_q": 12288,
+                "total_seqlen_k": 12288,
+                "chunk_size": 512,
+            },
         ],
     )
     def test_zeus_pipeline_block_causal_degree1(self, test_case: dict[str, Any]):

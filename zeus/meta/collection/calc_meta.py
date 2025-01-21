@@ -32,21 +32,33 @@ class AttnArg:
             self.is_causal_mapping, dtype=torch.bool, device=torch.cuda.current_device()
         )
 
-        assert self.q_ranges_tensor.shape == torch.Size([batch_size, 2])
-        assert self.k_ranges_tensor.shape == torch.Size([batch_size, 2])
-        assert self.is_causal_mapping_tensor.shape == torch.Size([batch_size])
+        if batch_size > 0:
+            assert self.q_ranges_tensor.shape == torch.Size(
+                [batch_size, 2]
+            ), f"{self.q_ranges_tensor.shape=}, {batch_size=}"
+            assert self.k_ranges_tensor.shape == torch.Size(
+                [batch_size, 2]
+            ), f"{self.k_ranges_tensor.shape=}, {batch_size=}"
+            assert self.is_causal_mapping_tensor.shape == torch.Size(
+                [batch_size]
+            ), f"{self.is_causal_mapping_tensor.shape=}, {batch_size=}"
+            self.skip_attn = False
+            self.max_seqlen_q = max(
+                q_range[1] - q_range[0] for q_range in self.q_ranges
+            )
+            self.max_seqlen_k = max(
+                k_range[1] - k_range[0] for k_range in self.k_ranges
+            )
+        elif batch_size == 0:
+            self.skip_attn = True
+            self.max_seqlen_q = 0
+            self.max_seqlen_k = 0
+        else:
+            raise ValueError(f"Invalid batch size: {batch_size}")
 
         # 检查每一个k_ranges的left < right
         for k_ranges in self.k_ranges:
             assert k_ranges[0] < k_ranges[1]
-
-        if batch_size == 0:
-            self.skip_attn = True
-        else:
-            self.skip_attn = False
-
-        self.max_seqlen_q = max(q_range[1] - q_range[0] for q_range in self.q_ranges)
-        self.max_seqlen_k = max(k_range[1] - k_range[0] for k_range in self.k_ranges)
 
     def to_ffa_args(self) -> dict:
         return {
