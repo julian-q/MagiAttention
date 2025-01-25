@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 from dataclasses import dataclass, field
 
 from zeus.common.ranges import AttnRanges

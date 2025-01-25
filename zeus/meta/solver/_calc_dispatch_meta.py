@@ -29,7 +29,6 @@ def calc_dispatch_meta_from_qk_ranges(
     total_seqlen_q: int,
     total_seqlen_k: int,
     chunk_size: int,
-    overlap_degree: int,
     cp_size: int,
     cp_rank: int,
     cp_group_nccl: dist.ProcessGroup,
@@ -50,8 +49,6 @@ def calc_dispatch_meta_from_qk_ranges(
         total_seqlen_k (int): the total seqlen of key (i.e. number of columns in the ref attn mask)
 
         chunk_size (int): chunk size to chunk the permutable tensor
-        overlap_degree (int): the degree to shard the permutable tensor further
-            into multiple stages for pipeline-style overlapping
 
         cp_size (int): context-parallel world size
         cp_rank (int): context-parallel local rank, ranging in [0,  cp_size)
@@ -114,9 +111,6 @@ def calc_dispatch_meta_from_qk_ranges(
         attn_mask_type, AttnMaskType.FULL
     ), "Only supports all full attn mask for now."
 
-    # TODO: limited to 1 overlap degree for now
-    assert overlap_degree == 1, "For now, only supports overlap degree == 1."
-
     # --------------      calculate dispatch meta   -------------- #
 
     # TODO: for now, we seperate different settings in different functions
@@ -133,7 +127,6 @@ def calc_dispatch_meta_from_qk_ranges(
                 num_chunks_q=num_chunks_q,
                 num_chunks_k=num_chunks_k,
                 chunk_size=chunk_size,
-                overlap_degree=overlap_degree,
                 cp_size=cp_size,
                 cp_rank=cp_rank,
                 cp_group_nccl=cp_group_nccl,
@@ -173,7 +166,6 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
     num_chunks_q: int,
     num_chunks_k: int,
     chunk_size: int,
-    overlap_degree: int,
     cp_size: int,
     cp_rank: int,
     cp_group_nccl: dist.ProcessGroup,
@@ -194,9 +186,6 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         num_chunks_q (int): number of chunks for query
         num_chunks_k (int): number of chunks for key
         chunk_size (int): chunk size to chunk the permutable tensor
-
-        overlap_degree (int): the degree to shard the permutable tensor further
-            into multiple stages for pipeline-style overlapping
 
         cp_size (int): context-parallel world size
         cp_rank (int): context-parallel local rank, ranging in [0,  cp_size)
@@ -244,7 +233,6 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         k_ranges=k_ranges,
         num_chunks=num_chunks,
         chunk_size=chunk_size,
-        overlap_degree=overlap_degree,
         attn_mask_type=attn_mask_type,
     )
     attn_areas = global_bucket.areas
@@ -293,7 +281,6 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         cp_group_gloo=cp_group_gloo,
         chunk_size=chunk_size,
         num_chunks=num_chunks,
-        overlap_degree=overlap_degree,
         seqlens=seqlens,
         seqlens_permed=seqlens_permed,
         seqlens_perm_idxs=seqlens_perm_idxs,
@@ -329,7 +316,6 @@ def _calc_self_attn_areas(
     attn_mask_type: list[AttnMaskType],
     num_chunks: int,
     chunk_size: int,
-    overlap_degree: int = 1,
 ) -> AttnBucket:
     """Compute the self-attn areas, with constructing the global bucket,
     which is mainly consists of a list of all the chunks in ascending order, with a length of `cp_size`
@@ -337,9 +323,8 @@ def _calc_self_attn_areas(
     Args:
         q_ranges (AttnRanges): the query ranges
         k_ranges (AttnRanges): the key ranges
-        attn_mask_type (List[AttnMaskType]): the attn mask type list
+        attn_mask_type (list[AttnMaskType]): the attn mask type list
         chunk_size (int | None): the chunk size, which should be divisible by `cp_size`
-        overlap_degree (int): the overlap degree of remote kv computation and communication
 
     Returns:
         AttnBucket: the global bucket
@@ -351,9 +336,6 @@ def _calc_self_attn_areas(
     assert is_list_value_all(attn_mask_type, just_same=True), (
         "Only supports either all full attn masks " "or all causal attn masks for now."
     )
-
-    # TODO: limited to 1 overlap degree for now
-    assert overlap_degree == 1, "For now, only supports overlap degree == 1."
 
     # -----------    init meta info and global bucket    ----------- #
 

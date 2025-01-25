@@ -55,7 +55,7 @@ def parameterize(argument: str, values: list[Any]) -> Callable:
 
     Args:
         argument (str): the name of the argument to parameterize
-        values (List[Any]): a list of values to iterate for this argument
+        values (list[Any]): a list of values to iterate for this argument
     """
 
     def _wrapper(func):

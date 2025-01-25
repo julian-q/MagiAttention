@@ -37,7 +37,6 @@ class TestGroundTruthDispatcher(TestCase):
         ]
 
         chunk_size = 4
-        overlap_degree = 1
 
         # --------------      init attn mask       -------------- #
 
@@ -57,7 +56,6 @@ class TestGroundTruthDispatcher(TestCase):
             k_ranges=k_ranges,
             attn_mask_type=attn_mask_type,
             chunk_size=chunk_size,
-            overlap_degree=overlap_degree,
         )
 
         self.assertEqual(global_bucket.area, attn_mask.area)

@@ -7,6 +7,7 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
+from zeus.common.enum import AttnOverlapMode
 from zeus.functional.dist_attn import (
     DistFlashAttn,
     DistFlashAttnConfig,
@@ -35,16 +36,23 @@ class TestDistFlashAttn(DistTestBase):
     def test_full_attn(self):
         device = torch.cuda.current_device()
 
+        # TODO: test overlap degree > 1
+        overlap_degree = 1
+
         attn_config = DistFlashAttnConfig(
             num_heads=1,
             head_dim=128,
             dtype=torch.bfloat16,
-            overlap_degree=1,
+            # NOTE: this test does not include overlap solver
+            # so only static mode is valid
+            overlap_mode=AttnOverlapMode.STATIC,
+            overlap_degree=overlap_degree,
             deterministic=False,
         )
         dist_attn = DistFlashAttn(attn_config)
 
         attn_calc_meta = AttnCalcMeta(
+            overlap_degree=overlap_degree,
             local_attn_arg=AttnArg(
                 q_ranges=[[0, 128]],
                 k_ranges=[[0, 128]],
@@ -64,6 +72,7 @@ class TestDistFlashAttn(DistTestBase):
         )
 
         comm_meta = CommMeta(
+            overlap_degree=overlap_degree,
             num_remote_tokens_per_overlap_stage=[128 * 3],
             group_cast_collective_args_list=[
                 GroupCastCollectiveArg(

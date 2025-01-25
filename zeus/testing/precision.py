@@ -1,6 +1,7 @@
 import re
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 
 
@@ -63,11 +64,11 @@ def torch_attn_ref(
         raise ValueError(f"Unsupported layout: {layout}")
 
     if high_precision:
-        out = torch.nn.functional.scaled_dot_product_attention(
+        out = F.scaled_dot_product_attention(
             q.float(), k.float(), v.float(), attn_mask=mask
         )
     else:
-        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
 
     if layout == "thd":
         out = rearrange(out, "1 h t d -> t h d")

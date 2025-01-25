@@ -1,5 +1,3 @@
-from typing import List, Tuple
-
 import torch
 import torch.distributed as dist
 
@@ -16,9 +14,9 @@ def _trans_with_dim0(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
 
 
 def _get_dims_as_trans_with_dim0(
-    x_shape: List[int],
+    x_shape: list[int],
     dim: int = 0,
-) -> Tuple[int, List[int]]:
+) -> tuple[int, list[int]]:
     shape_len = len(x_shape)
     assert dim == -1 or 0 <= dim < len(
         x_shape
@@ -38,7 +36,7 @@ def all_gather_v(
     x_local: torch.Tensor,
     group: dist.ProcessGroup,
     dim: int = 0,
-    split_sizes: List[int] | None = None,
+    split_sizes: list[int] | None = None,
 ) -> torch.Tensor:
     """All-gather the local tensor 'x_local' along its dim,
     and return the gathered tensor 'x_gather',
@@ -48,7 +46,7 @@ def all_gather_v(
         x_local (torch.Tensor): the local tensor to be gathered
         group (dist.ProcessGroup): the process group to be used
         dim (int): the dim to be gathered along
-        split_sizes (List[int] | None): the split sizes along the dim,
+        split_sizes (list[int] | None): the split sizes along the dim,
             where len(split_sizes) should equal to the world size of the group,
                 and split_sizes[rank] is the dim size of this local tensor,
                 and sum(split_sizes) should equal to the dim size of the global tensor,

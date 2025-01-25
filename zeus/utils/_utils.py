@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, List, Sequence, Tuple, TypeAlias, Union
+from typing import Any, Callable, Sequence, TypeAlias, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,7 +12,7 @@ from . import nvtx
 
 def setup_dist_env(
     base_seed: int | None = None, seed_bias: Callable = lambda rank: 0
-) -> Tuple[int, int, dist.ProcessGroup, str, int | None]:
+) -> tuple[int, int, dist.ProcessGroup, str, int | None]:
     """set up distributed environment with NCCL backend,
     NOTE: the test script using this func to set up should be executed through torchrun
     """
@@ -38,7 +38,7 @@ def clearup_dist_env() -> None:
     dist.destroy_process_group()
 
 
-def rprint_rank(msg: str, rank: int | None = None, width: int = 50):
+def rprint_rank(msg: str, rank: int | None = None, width: int = 50) -> None:
     if rank is None or dist.get_rank() == rank:
         rank = dist.get_rank()
         rprint(
@@ -47,16 +47,27 @@ def rprint_rank(msg: str, rank: int | None = None, width: int = 50):
         )
 
 
-NestedIntList: TypeAlias = Union[List[int], Tuple[int, ...], Sequence["NestedIntList"]]
+def write_rank(msg: str, path: str, rank: int | None = None, width: int = 50) -> None:
+    if rank is None or dist.get_rank() == rank:
+        rank = dist.get_rank()
+        write_content = (
+            f"\n{'-' * width}{' ' * 5}{rank=}{' ' * 5}{'-' * width}\n\n" + msg
+        )
+
+        with open(path, "a") as f:
+            f.write(write_content)
+
+
+NestedIntList: TypeAlias = Union[list[int], tuple[int, ...], Sequence["NestedIntList"]]
 
 
 @nvtx.instrument_nvtx
-def flatten_nested_list(nested_list: NestedIntList) -> List[int]:
+def flatten_nested_list(nested_list: NestedIntList) -> list[int]:
     # Initialize a stack with the reversed nested list to process elements from left to right
     stack = list(nested_list[::-1])
 
     # Initialize an empty list to store the flattened elements
-    flat_list: List[int] = []
+    flat_list: list[int] = []
 
     # Process the stack until all elements are handled
     while stack:
@@ -71,7 +82,7 @@ def flatten_nested_list(nested_list: NestedIntList) -> List[int]:
     return flat_list  # Return the fully flattened list
 
 
-def perm_idxs2unperm_idxs(perm_idxs: List[int]) -> List[int]:
+def perm_idxs2unperm_idxs(perm_idxs: list[int]) -> list[int]:
     if not perm_idxs:
         return []
 
@@ -83,7 +94,7 @@ def perm_idxs2unperm_idxs(perm_idxs: List[int]) -> List[int]:
     return unperm_idxs
 
 
-def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> List[Any]:
+def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> list[Any]:
     if isinstance(x, (list, tuple)):
         return list(x)
     else:
@@ -116,6 +127,29 @@ def is_list_type_all(
     return all(isinstance(x, _type) for x in _list)
 
 
+def transpose_matrix(matrix: list[list[Any]]) -> list[list[Any]]:
+    """
+    Transposes a 2D list (matrix) where each cell contains custom objects.
+
+    Args:
+        matrix (list[list[Any]]): A 2D list to be transposed.
+
+    Returns:
+        list[list[Any]]: The transposed 2D list.
+    """
+    assert matrix and isinstance(matrix[0], list), "Input must be a non-empty 2D list."
+
+    col_size = len(matrix[0])
+    assert all(
+        len(row) == col_size for row in matrix
+    ), "All rows must have the same length to be transposed."
+
+    # transpose the matrix using zip
+    transposed = [list(row) for row in zip(*matrix)]
+
+    return transposed
+
+
 def repr_matrix(matrix: np.ndarray) -> str:
     repr_str = ""
     sep = "    "
@@ -142,7 +176,7 @@ def vis_matrix(
     title: str = "",
     xlabel: str = "",
     ylabel: str = "",
-    val_ticks: List[float] | None = None,
+    val_ticks: list[float] | None = None,
     format_ticks: Callable | None = None,
     save_path: str | None = None,
 ) -> None:

@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from typing import Any, Iterable, List, Tuple
+from typing import Any, Iterable
 
 import numpy as np
 import torch
@@ -56,7 +56,7 @@ class AttnMask(nn.Module):
         mask_tensor: torch.Tensor,
         q_ranges: AttnRanges,
         k_ranges: AttnRanges,
-        attn_mask_type: List[AttnMaskType],
+        attn_mask_type: list[AttnMaskType],
         total_seqlen_q: int,
         total_seqlen_k: int,
     ) -> None:
@@ -85,7 +85,7 @@ class AttnMask(nn.Module):
         self._is_pure_causal = None
         self._is_empty = None
 
-    def tuples(self) -> Iterable[Tuple[AttnRange, AttnRange, AttnMaskType]]:
+    def tuples(self) -> Iterable[tuple[AttnRange, AttnRange, AttnMaskType]]:
         for q_range, k_range, mask_type in zip(
             self.q_ranges,
             self.k_ranges,
@@ -98,7 +98,7 @@ class AttnMask(nn.Module):
         cls,
         q_ranges: AttnRanges,
         k_ranges: AttnRanges,
-        attn_mask_type: List[AttnMaskType],
+        attn_mask_type: list[AttnMaskType],
         total_seqlen_q: int | None = None,
         total_seqlen_k: int | None = None,
     ) -> "AttnMask":
@@ -108,7 +108,7 @@ class AttnMask(nn.Module):
         Args:
             q_ranges (AttnRanges): the query ranges
             k_ranges (AttnRanges): the key ranges
-            attn_mask_type (List[AttnMaskType]): the attn mask type list
+            attn_mask_type (list[AttnMaskType]): the attn mask type list
             NOTE: the length of q_ranges, k_ranges and attn_mask_type should be equal
             total_seqlen_q (int | None): the total seqlen of query (i.e. number of rows)
             total_seqlen_k (int | None): the total seqlen of key (i.e. number of columns)
@@ -170,14 +170,14 @@ class AttnMask(nn.Module):
     @classmethod
     def from_mask(
         cls,
-        mask: List[List[int]] | torch.Tensor,
+        mask: list[list[int]] | torch.Tensor,
     ) -> "AttnMask":
         """The (less common) factory method to construct a AttnMask instance,
         with a 2d int32 mask tensor, where the nonzero cell indicates unmasked position,
         while the zero cell indicates masked position
 
         Args:
-            mask (List[List[int]] | torch.Tensor): the 2d int32 mask tensor
+            mask (list[list[int]] | torch.Tensor): the 2d int32 mask tensor
 
         Returns:
             AttnMask: the attn mask instance

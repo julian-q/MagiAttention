@@ -8,7 +8,7 @@ from torch.testing._internal.common_utils import run_tests
 import zeus
 import zeus.testing
 from zeus.comm.primitive import group_cast_collective, group_reduce_collective
-from zeus.common.enum import AttnMaskType
+from zeus.common.enum import AttnMaskType, AttnOverlapMode
 from zeus.common.ranges import AttnRanges
 from zeus.functional.dispatch import dispatch_func, undispatch_func
 from zeus.functional.dist_attn import (
@@ -188,7 +188,11 @@ class TestPipeline(DistTestBase):
             num_heads=1,
             head_dim=128,
             dtype=torch.float16,
+            # NOTE: use dynamic mode by default in the future
+            # but using static mode with overlap_degree=1 for now
+            overlap_mode=AttnOverlapMode.STATIC,
             overlap_degree=1,
+            # overlap_mode=AttnOverlapMode.DYNAMIC,
             deterministic=False,
         )
 
@@ -199,7 +203,6 @@ class TestPipeline(DistTestBase):
             total_seqlen_q=total_seqlen_q,
             total_seqlen_k=total_seqlen_k,
             chunk_size=chunk_size,
-            overlap_degree=dist_attn_config.overlap_degree,
             cp_size=self.world_size,
             cp_rank=self.rank,
             cp_group_nccl=self.process_group,
@@ -215,6 +218,7 @@ class TestPipeline(DistTestBase):
             bucket_per_rank=buckets_per_rank,
             cp_group_nccl=self.process_group,
             cp_group_gloo=process_group_gloo,
+            overlap_mode=dist_attn_config.overlap_mode,
             overlap_degree=dist_attn_config.overlap_degree,
         )
 

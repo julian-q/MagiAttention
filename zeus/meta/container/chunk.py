@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 from dataclasses import dataclass, field
 
 from zeus.common.ranges import AttnRanges
@@ -16,14 +15,14 @@ class AttnChunk:
     def q_ranges(self) -> AttnRanges:
         q_ranges = AttnRanges()
         for slice in self.q_slices:
-            q_ranges.append(slice.q_range, check=False)
+            q_ranges.append(slice.q_range, check=False)  # type: ignore
         return q_ranges
 
     @property
     def k_ranges(self) -> AttnRanges:
         k_ranges = AttnRanges()
         for slice in self.q_slices:
-            k_ranges.append(slice.k_range, check=False)
+            k_ranges.append(slice.k_range, check=False)  # type: ignore
         return k_ranges
 
     @property

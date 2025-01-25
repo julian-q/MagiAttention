@@ -1,4 +1,4 @@
-from typing import Any, Iterator, List, Optional, Sequence, Tuple, TypeAlias, Union
+from typing import Any, Iterator, Optional, TypeAlias, Union
 
 import torch
 
@@ -6,10 +6,10 @@ from zeus.utils import nvtx
 
 from .range import AttnRange, NaiveRange, RangeError
 
-NaiveRanges: TypeAlias = List[NaiveRange]
+NaiveRanges: TypeAlias = list[NaiveRange]
 
 
-def is_valid_cu_seqlens(cu_seqlens: List[int], seq_len: int) -> bool:
+def is_valid_cu_seqlens(cu_seqlens: list[int], seq_len: int) -> bool:
     if len(cu_seqlens) == 0:
         return True
 
@@ -25,7 +25,7 @@ def is_valid_cu_seqlens(cu_seqlens: List[int], seq_len: int) -> bool:
     return True
 
 
-def check_valid_cu_seqlens(cu_seqlens: List[int], seq_len: int) -> None:
+def check_valid_cu_seqlens(cu_seqlens: list[int], seq_len: int) -> None:
     if not is_valid_cu_seqlens(cu_seqlens, seq_len):
         raise ValueError(
             f"The cu_seqlens {cu_seqlens} is invalid against the rule: 'cu_seqlens[0] == 0', \
@@ -58,7 +58,7 @@ class AttnRanges:
     """
 
     def __init__(self) -> None:
-        self._ranges: List[AttnRange] = []
+        self._ranges: list[AttnRange] = []
 
     def is_valid_idx(self, idx: int) -> bool:
         return 0 <= idx < self.size
@@ -155,7 +155,7 @@ class AttnRanges:
     def merge(self) -> "AttnRanges":
         _ranges = self.sort()._ranges
 
-        _merged_ranges: List[AttnRange] = []
+        _merged_ranges: list[AttnRange] = []
 
         start, end = None, None
         for attn_range in _ranges:
@@ -206,7 +206,7 @@ class AttnRanges:
 
         return True
 
-    def to_cu_seqlens(self, seq_len: int) -> List[int]:
+    def to_cu_seqlens(self, seq_len: int) -> list[int]:
         assert self.is_cu_seqlens(
             seq_len
         ), "The ranges can not be converted to cu_seqlens"
@@ -217,7 +217,7 @@ class AttnRanges:
         self,
         attn_range: AttnRange,
         is_self_merged: bool = False,
-        prefix_offset: Optional[List[int]] = None,
+        prefix_offset: Optional[list[int]] = None,
     ) -> AttnRange:
         """
         将attn_range映射到self的local_ranges中, 并返回attn_range在local_ranges中的位置
@@ -225,7 +225,7 @@ class AttnRanges:
         Args:
             attn_range(AttnRange): 需要被转换的attn_range
             is_self_merged(bool): 是否self已经merge
-            prefix_offset(Optional[List[int]]): 如果prefix_offset为None, 则计算prefix_offset
+            prefix_offset(Optional[list[int]]): 如果prefix_offset为None, 则计算prefix_offset
 
         Returns:
             local_range(AttnRange): attn_range在self的local_ranges中的位置
@@ -427,7 +427,7 @@ class AttnRanges:
 
     @staticmethod
     def from_cu_seqlens(
-        cu_seqlens: List[int],
+        cu_seqlens: list[int],
         seq_len: int,
     ) -> "AttnRanges":
         check_valid_cu_seqlens(cu_seqlens, seq_len)
@@ -521,5 +521,3 @@ class AttnRanges:
 
 
 RangesType: TypeAlias = AttnRanges | NaiveRanges
-
-NestedIntList: TypeAlias = Union[List[int], Tuple[int, ...], Sequence["NestedIntList"]]

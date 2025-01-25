@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -72,5 +72,15 @@ class AttnArg:
 
 @dataclass
 class AttnCalcMeta:
+    overlap_degree: int
     local_attn_arg: AttnArg
-    remote_attn_args_list: list[AttnArg]
+    remote_attn_args_list: list[AttnArg] = field(
+        default_factory=list,
+        metadata={"help": "remote attn args list for each overlap stage"},
+    )
+
+    def __post_init__(self):
+        assert self.overlap_degree == len(self.remote_attn_args_list), (
+            f"The {self.overlap_degree=}, but got inconsistent: "
+            f"{len(self.remote_attn_args_list)=}."
+        )

@@ -71,7 +71,6 @@ class TestDispatcher(DistTestBase):
         ]
 
         chunk_size = 4
-        overlap_degree = 1  # TODO: limited to 1 for now
 
         seq_dim = 0
 
@@ -89,7 +88,6 @@ class TestDispatcher(DistTestBase):
             total_seqlen_q=q_ranges.end,
             total_seqlen_k=q_ranges.end,  # self-attn
             chunk_size=chunk_size,
-            overlap_degree=overlap_degree,
             cp_rank=rank,
             cp_size=cp_size,
             cp_group_nccl=world_group_nccl,

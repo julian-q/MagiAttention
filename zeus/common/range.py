@@ -1,7 +1,6 @@
-# mypy: ignore-errors
-from typing import Any, List, Tuple, TypeAlias, Union
+from typing import Any, TypeAlias, Union
 
-NaiveRange: TypeAlias = Tuple[int, int]
+NaiveRange: TypeAlias = tuple[int, int]
 
 
 class RangeError(Exception):
@@ -70,7 +69,7 @@ class AttnRange:
 
         return AttnRange(start=min(start, end), end=end)
 
-    def diff_by(self, other: "AttnRange") -> List["AttnRange"]:
+    def diff_by(self, other: "AttnRange") -> list["AttnRange"]:
         """other - self"""
         diff_ranges = []
 

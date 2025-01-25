@@ -8,6 +8,7 @@ from zeus.utils import (
     is_list_type_all,
     is_list_value_all,
     perm_idxs2unperm_idxs,
+    transpose_matrix,
     wrap_to_list,
 )
 
@@ -270,6 +271,36 @@ class TestCommonUtils(TestCase):
                 just_same=True,
             )
         )
+
+    def test_transpose_matrix(self):
+        class CustomObject:
+            def __init__(self, value):
+                self.value = value
+
+            def __repr__(self):
+                return f"CustomObject({self.value})"
+
+            def __eq__(self, other) -> bool:
+                if isinstance(other, CustomObject):
+                    return self.value == other.value
+                return False
+
+        # create a 2D list with custom objects
+        matrix = [
+            [CustomObject(1), CustomObject(2), CustomObject(3)],
+            [CustomObject(4), CustomObject(5), CustomObject(6)],
+            [CustomObject(7), CustomObject(8), CustomObject(9)],
+        ]
+        ref_matrix_t = [
+            [CustomObject(1), CustomObject(4), CustomObject(7)],
+            [CustomObject(2), CustomObject(5), CustomObject(8)],
+            [CustomObject(3), CustomObject(6), CustomObject(9)],
+        ]
+
+        # transpose the matrix
+        matrix_t = transpose_matrix(matrix)
+
+        self.assertEqual(matrix_t, ref_matrix_t)
 
 
 if __name__ == "__main__":

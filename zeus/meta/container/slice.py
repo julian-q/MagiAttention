@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 from dataclasses import dataclass
 
 from zeus.common.enum import AttnMaskType
@@ -16,8 +15,12 @@ class AttnSlice:
 
     area: int = 0
 
+    def __post_init__(self):
+        pass
+
     def __repr__(self) -> str:
         return (
             f"AttnSlice(slice_id={self.slice_id}, "
-            f"q_range={self.q_range}, k_range={self.k_range}, mask_type={self.mask_type}, area={self.area})"
+            f"q_range={self.q_range}, k_range={self.k_range}, "
+            f"mask_type={self.mask_type}, area={self.area})"
         )

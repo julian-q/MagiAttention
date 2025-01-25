@@ -1,7 +1,5 @@
-# mypy: ignore-errors
 import heapq
 from enum import Enum
-from typing import List, Tuple
 
 import numpy as np
 import torch.nn as nn
@@ -41,36 +39,36 @@ class DispatchSolver(nn.Module):
 
     def solve(
         self,
-        jobs: List[float],
+        jobs: list[float],
         k: int,
         **kwargs,
-    ) -> Tuple[float, List[float] | None, List[List[int]] | None]:
+    ) -> tuple[float, list[float] | None, list[list[int]] | None]:
         """Dispatch jobs to k buckets, to make the workload of each bucket as balanced as possible
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             k (int): the number of buckets
             kwargs (dict | None): additional arguments for specific algorithms
         Returns:
             max_workload (float): the maximum workload of any bucket
-            workloads (List[float], optional): the workload of each bucket
-            partitions (List[List[int]], optional): the partition of jobs, where each element is a list of job indices,
+            workloads (list[float], optional): the workload of each bucket
+            partitions (list[list[int]], optional): the partition of jobs, where each element is a list of job indices,
                 among them any two elements are mutually exclusive
         """
 
         self.solve_func(jobs, k, **kwargs)
 
-        return self.max_workload, self.workloads, self.partitions
+        return self.max_workload, self.workloads, self.partitions  # type: ignore
 
-    def _bs_backtrack(self, jobs: List[float], idx: int, limit: int) -> bool:
+    def _bs_backtrack(self, jobs: list[float], idx: int, limit: float) -> bool:
         """Assign the current job with index `idx` to some bucket whose workload does not exceed `limit`
         and then recursively assign the remaining jobs,
         until all jobs have been assigned or no solution is found
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             idx (int): the index of the current job
-            limit (int): the maximum workload of each bucket
+            limit (float): the maximum workload of each bucket
         Returns:
             bool: whether a solution is found
         """
@@ -79,7 +77,7 @@ class DispatchSolver(nn.Module):
             return True  # all jobs have been assigned
 
         current_job_workload = jobs[idx]
-        for partition in self.partitions:
+        for partition in self.partitions:  # type: ignore
             partition_sum = sum(jobs[idx] for idx in partition)
 
             if partition_sum + current_job_workload <= limit:
@@ -96,37 +94,37 @@ class DispatchSolver(nn.Module):
 
         return False
 
-    def _bs_check(self, jobs: List[float], k: int, limit: int) -> bool:
+    def _bs_check(self, jobs: list[float], k: int, limit: float) -> bool:
         """Check if it is possible to assign all jobs to k buckets,
         such that the workload of each bucket does not exceed `limit`
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             k (int): the number of buckets
-            limit (int): the maximum workload of each bucket
+            limit (float): the maximum workload of each bucket
         Returns:
             bool: whether a solution is found
         """
-        self.partitions = [[] for _ in range(k)]
+        self.partitions = [[] for _ in range(k)]  # type: ignore
         return self._bs_backtrack(jobs, 0, limit)
 
-    def _solve_with_lb(self, jobs: List[float], k: int, **kwargs) -> None:
+    def _solve_with_lb(self, jobs: list[float], k: int, **kwargs) -> None:
         """Lower bound for the job partition to minimize the maximum workload
         NOTE: this algorithm is just to get the lower bound of the answer, which might be invalid
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             k (int): the number of buckets, by which the number of jobs should be divisible
             kwargs (dict | None): additional arguments
         """
-        self.max_workload = sum(jobs) / k
+        self.max_workload = sum(jobs) / k  # type: ignore
 
-    def _solve_with_bs(self, jobs: List[float], k: int, **kwargs) -> None:
+    def _solve_with_bs(self, jobs: list[float], k: int, **kwargs) -> None:
         """Binary search for the job partition to minimize the maximum workload
         NOTE: this algorithm has no constraint on the number of jobs dispatched in each bucket
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             k (int): the number of buckets
             kwargs (dict | None): additional arguments
 
@@ -161,17 +159,17 @@ class DispatchSolver(nn.Module):
             else:
                 left = mid + 1  # if no, increase the range to the left half
 
-        self.max_workload = left
-        self.workloads = [sum(jobs[i] for i in p) for p in self.partitions]
-        self.partitions = [[sorted_indices[i] for i in p] for p in self.partitions]
+        self.max_workload = left  # type: ignore
+        self.workloads = [sum(jobs[i] for i in p) for p in self.partitions]  # type: ignore
+        self.partitions = [[sorted_indices[i] for i in p] for p in self.partitions]  # type: ignore
 
-    def _solve_with_dp(self, jobs: List[float], k: int, **kwargs) -> None:
+    def _solve_with_dp(self, jobs: list[float], k: int, **kwargs) -> None:
         """Dynamic programming for the job partition to minimize the maximum workload
         NOTE: this algorithm has no constraint on the number of jobs dispatched in each bucket,
         and it only returns the scalar answer of the maximum workload, w/o neither the partition or the workloads
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             k (int): the number of buckets
             kwargs (dict | None): additional arguments
 
@@ -205,7 +203,7 @@ class DispatchSolver(nn.Module):
         for i, v in enumerate(jobs):
             bit = 1 << i
             for j in range(bit):
-                dp[bit | j] = dp[j] + v
+                dp[bit | j] = dp[j] + v  # type: ignore
         sum = dp.copy()
 
         # dp transition, where:
@@ -221,19 +219,19 @@ class DispatchSolver(nn.Module):
                     s = (s - 1) & j  # transfer to the next substate
 
         # dp(k-1)[m-1] is the answer, since we already assign all jobs to k buckets
-        self.max_workload = dp[-1]
+        self.max_workload = dp[-1]  # type: ignore
 
         # NOTE: since there's no traceback, we can't recover the partition, nor the workload of each bucket
         self.workloads = None
         self.partitions = None
 
-    def _solve_with_minhp(self, jobs: List[float], k: int, **kwargs) -> None:
+    def _solve_with_minhp(self, jobs: list[float], k: int, **kwargs) -> None:
         """Greedy algorithm using a min-heap for the job partition to minimize the maximum workload,
         with the hard constraint that the number of jobs dispatched in each bucket should be the same
         NOTE: this algorithm is not guaranteed to find the optimal solution
 
         Args:
-            jobs (List[float]): the workload of each job
+            jobs (list[float]): the workload of each job
             k (int): the number of buckets, by which the number of jobs should be divisible
             kwargs (dict | None): additional arguments
 
@@ -267,8 +265,8 @@ class DispatchSolver(nn.Module):
 
         # init the job partition and its workloads
         bucket_nums = [0] * k
-        self.workloads = [0] * k
-        self.partitions = [[] for _ in range(k)]
+        self.workloads = [0] * k  # type: ignore
+        self.partitions = [[] for _ in range(k)]  # type: ignore
 
         # init the min-heap with size of k
         # where each heap element is a tuple: (current_sum, bucket_index)
@@ -285,14 +283,14 @@ class DispatchSolver(nn.Module):
                 current_sum, bucket_idx = heapq.heappop(heap)
                 if bucket_nums[bucket_idx] < bucket_num_limit:
                     # assign the job to this bucket
-                    self.partitions[bucket_idx].append(job_idx)
-                    self.workloads[bucket_idx] = current_sum + job_workload
+                    self.partitions[bucket_idx].append(job_idx)  # type: ignore
+                    self.workloads[bucket_idx] = current_sum + job_workload  # type: ignore
                     bucket_nums[bucket_idx] += 1
                     # push the updated sum of this bucket back into the heap
-                    heapq.heappush(heap, (self.workloads[bucket_idx], bucket_idx))
+                    heapq.heappush(heap, (self.workloads[bucket_idx], bucket_idx))  # type: ignore
                     break
             else:  # if no bucket is found for this job (which shouldn't happen), raise an error
                 raise RuntimeError(f"No bucket is found for the job {job_idx}.")
 
-        self.max_workload = max(self.workloads)
-        self.partitions = [[sorted_indices[i] for i in p] for p in self.partitions]
+        self.max_workload = max(self.workloads)  # type: ignore
+        self.partitions = [[sorted_indices[i] for i in p] for p in self.partitions]  # type: ignore

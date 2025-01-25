@@ -9,9 +9,9 @@ import torch.nn.functional as F
 from flash_attn_interface import _flex_flash_attn_backward, _flex_flash_attn_forward
 from torch.distributed import Work
 
+from zeus.comm.primitive import group_cast_collective, group_reduce_collective
+from zeus.common.enum import AttnOverlapMode
 from zeus.meta.collection import AttnCalcMeta, CommMeta
-
-from ..comm.primitive import group_cast_collective, group_reduce_collective
 
 logger = getLogger("zeus")
 
@@ -25,9 +25,21 @@ class DistFlashAttnConfig:
     num_heads: int
     head_dim: int
     dtype: torch.dtype
+    overlap_mode: AttnOverlapMode = AttnOverlapMode.STATIC
+    overlap_degree: int | None = 1
     deterministic: bool = False
-    # REVIEW(xiaowu): overlap_degree应该是静态的嘛？
-    overlap_degree: int = 1
+
+    def __post_init__(self):
+        if self.overlap_mode is AttnOverlapMode.STATIC:
+            assert self.overlap_degree is not None, (
+                "When using static overlap mode, "
+                "the overlap_degree should be set explicitly."
+            )
+        elif self.overlap_mode is AttnOverlapMode.DYNAMIC:
+            assert self.overlap_degree is None, (
+                "When using dynamic overlap mode, "
+                "the overlap_degree should not be set."
+            )
 
 
 class DistFlashAttnRuntime:
@@ -61,6 +73,8 @@ class DistFlashAttnRuntime:
         self.comm_meta = comm_meta
         self.calc_meta = calc_meta
         self.cp_group_nccl = cp_group_nccl
+
+        self.overlap_degree = comm_meta.overlap_degree
 
     def fetch_remote_kv(
         self, k: torch.Tensor, v: torch.Tensor, overlap_stage: int
@@ -507,7 +521,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
         out_list.append(out)
         lse_list.append(lse)
 
-        for overlap_stage in range(dist_attn_config.overlap_degree):
+        for overlap_stage in range(dist_attn_runtime.overlap_degree):
             # Wait for remote kv to be fetched
             remote_kv_work.wait()
 
@@ -515,7 +529,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
             ###########################################
             # Pre-fetch remote kv for overlap stage i #
             ###########################################
-            if overlap_stage < dist_attn_config.overlap_degree - 1:
+            if overlap_stage < dist_attn_runtime.overlap_degree - 1:
                 (
                     remote_kv_work,
                     remote_kv_buffer,
@@ -544,7 +558,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
         out, final_lse = dist_attn_runtime.result_correction(
             out_list=out_list,
             lse_list=lse_list,
-            overlap_degree=dist_attn_config.overlap_degree,
+            overlap_degree=dist_attn_runtime.overlap_degree,
         )
 
         ctx.save_for_backward(local_q, local_k, local_v, out, final_lse)
@@ -580,12 +594,12 @@ class DistFlashAttnFunc(torch.autograd.Function):
             deterministic=dist_attn_config.deterministic,
         )
 
-        for overlap_stage in range(dist_attn_config.overlap_degree):
+        for overlap_stage in range(dist_attn_runtime.overlap_degree):
             remote_kv_work.wait()
 
             curr_remote_k, curr_remote_v = remote_kv_post_process_fn(remote_kv_buffer)
 
-            if overlap_stage < dist_attn_config.overlap_degree - 1:
+            if overlap_stage < dist_attn_runtime.overlap_degree - 1:
                 (
                     remote_kv_work,
                     remote_kv_buffer,

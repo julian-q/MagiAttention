@@ -15,3 +15,8 @@ class AttnRole(Enum):
 class AttnMaskType(Enum):
     FULL = "full"
     CAUSAL = "causal"  # NOTE: this causal mask aligns to the bottom-right corner if it's not square
+
+
+class AttnOverlapMode(Enum):
+    STATIC = "static"
+    DYNAMIC = "dynamic"

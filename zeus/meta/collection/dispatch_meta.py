@@ -1,6 +1,4 @@
-# mypy: ignore-errors
 from dataclasses import dataclass
-from typing import List
 
 import torch.distributed as dist
 
@@ -15,7 +13,7 @@ class DispatchMeta:
 
     attn_role: AttnRole
     attn_type: AttnType
-    attn_mask_type: List[AttnMaskType]
+    attn_mask_type: list[AttnMaskType]
 
     ranges: AttnRanges
 
@@ -25,28 +23,26 @@ class DispatchMeta:
     chunk_size: int
     num_chunks: int
 
-    overlap_degree: int
-
     cp_rank: int
     cp_size: int
     cp_group_nccl: dist.ProcessGroup
     cp_group_gloo: dist.ProcessGroup
 
-    seqlens: List[int]
-    seqlens_permed: List[int]
-    seqlens_perm_idxs: List[int]
-    seqlens_unperm_idxs: List[int]
+    seqlens: list[int]
+    seqlens_permed: list[int]
+    seqlens_perm_idxs: list[int]
+    seqlens_unperm_idxs: list[int]
 
-    cu_seqlens: List[int]
-    cu_seqlens_permed: List[int]
+    cu_seqlens: list[int]
+    cu_seqlens_permed: list[int]
 
-    partitions: List[List[int]]
-    partitions_perm_idxs: List[int]
-    partitions_unperm_idxs: List[int]
+    partitions: list[list[int]]
+    partitions_perm_idxs: list[int]
+    partitions_unperm_idxs: list[int]
 
     global_bucket: AttnBucket
-    buckets_per_rank: List[AttnBucket]
-    host_ranges_per_rank: List[AttnRanges]
+    buckets_per_rank: list[AttnBucket]
+    host_ranges_per_rank: list[AttnRanges]
 
     def __post_init__(self) -> None:
         assert len(self.seqlens) == len(self.seqlens_permed) == self.batch_size

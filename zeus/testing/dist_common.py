@@ -1,6 +1,6 @@
 import datetime
 from functools import wraps
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -82,7 +82,7 @@ def with_comms(func: TestFunc) -> TestFunc:
 
     @wraps(func)  # pyre-ignore[6]
     def wrapper(
-        self, *args: Tuple[object], **kwargs: Dict[str, Any]  # type: ignore[misc]
+        self, *args: tuple[object], **kwargs: dict[str, Any]  # type: ignore[misc]
     ) -> None:
         # if backend not specified, and cuda available, then use nccl, else gloo
         if torch.cuda.is_available() and torch.cuda.device_count() >= self.world_size:

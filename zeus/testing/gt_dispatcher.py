@@ -7,7 +7,7 @@ from zeus.common.mask import AttnMask
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
 from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
-from zeus.meta.solver import DispatchAlgorithm
+from zeus.meta.solver.dispatch_solver import DispatchAlgorithm
 
 
 class GroundTruthDispatcher(nn.Module):
@@ -40,7 +40,6 @@ class GroundTruthDispatcher(nn.Module):
         k_ranges: AttnRanges,
         attn_mask_type: List[AttnMaskType],
         chunk_size: int | None = None,
-        overlap_degree: int = 1,
     ) -> AttnBucket:
         """Compute the self-attn areas, with constructing the global bucket,
         which is mainly consists of a list of all the chunks in ascending order, with a length of `cp_size`
@@ -50,7 +49,6 @@ class GroundTruthDispatcher(nn.Module):
             k_ranges (AttnRanges): the key ranges
             attn_mask_type (List[AttnMaskType]): the attn mask type list
             chunk_size (int | None): the chunk size, which should be divisible by `cp_size`
-            overlap_degree (int): the overlap degree of remote kv computation and communication
 
         Returns:
             AttnBucket: the global bucket
