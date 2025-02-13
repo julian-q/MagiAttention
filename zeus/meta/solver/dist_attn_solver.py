@@ -424,7 +424,7 @@ class AttnSolver:
         dist.all_gather_object(
             remote_rank_entry_per_stage_per_rank,
             remote_rank_entry_per_stage_this_rank,
-            group=self.cp_group_gloo,
+            group=self.cp_group_nccl,
         )
 
         # check shape to be [cp_size, overlap_degree]
@@ -633,7 +633,7 @@ class AttnSolver:
         # all gather initial recv/send transfer info for each rank
         transfer_info_per_rank: list[TransferInfo] = [None] * self.cp_size  # type: ignore
         dist.all_gather_object(
-            transfer_info_per_rank, transfer_info_this_rank, group=self.cp_group_gloo
+            transfer_info_per_rank, transfer_info_this_rank, group=self.cp_group_nccl
         )
 
         # sanity check:
