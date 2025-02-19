@@ -102,10 +102,13 @@ def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> list[Any]:
 
 
 def is_list_value_all(
-    _list: list[Any], val: Any = None, just_same: bool = False
+    _list: list[Any],
+    val: Any = None,
+    just_same: bool = False,
+    allow_empty: bool = False,
 ) -> bool:
     if not _list:
-        return False
+        return allow_empty
 
     if just_same:
         assert val is None, "val should be None when just_same is True"
@@ -115,10 +118,13 @@ def is_list_value_all(
 
 
 def is_list_type_all(
-    _list: list[Any], _type: Any = None, just_same: bool = False
+    _list: list[Any],
+    _type: Any = None,
+    just_same: bool = False,
+    allow_empty: bool = False,
 ) -> bool:
     if not _list:
-        return False
+        return allow_empty
 
     if just_same:
         assert _type is None, "_type should be None when just_same is True"

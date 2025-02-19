@@ -103,7 +103,7 @@ class AttnMask(nn.Module):
         total_seqlen_k: int | None = None,
     ) -> "AttnMask":
         """The (most common) factory method to construct a AttnMask instance,
-        with q_ranges, k_ranges and corresponding attn_mask_type
+        with q_ranges, k_ranges and corr. attn_mask_type
 
         Args:
             q_ranges (AttnRanges): the query ranges
@@ -116,8 +116,8 @@ class AttnMask(nn.Module):
             AttnMask: the attn mask instance
         """
         assert (
-            q_ranges.size == k_ranges.size == len(attn_mask_type)
-        ), f"The length should be equal, but got: {q_ranges.size=}, {k_ranges.size=}, {len(attn_mask_type)=}"  # noqa
+            len(q_ranges) == len(k_ranges) == len(attn_mask_type)
+        ), f"The length should be equal, but got: {len(q_ranges)=}, {len(k_ranges)=}, {len(attn_mask_type)=}"  # noqa
 
         with cls.can_instantiate_ctx():
             total_seqlen_q = (
@@ -143,7 +143,10 @@ class AttnMask(nn.Module):
                     ] = cls.unmasked_flag
                 elif mask_type is AttnMaskType.CAUSAL:
                     causal_mask = make_causal_mask(
-                        q_range.size, k_range.size, dtype=torch.int32, device=cls.device
+                        q_range.seqlen,
+                        k_range.seqlen,
+                        dtype=torch.int32,
+                        device=cls.device,
                     )
                     causal_mask[causal_mask == 0] = cls.masked_flag
                     causal_mask[causal_mask == 1] = cls.unmasked_flag
@@ -239,7 +242,7 @@ class AttnMask(nn.Module):
                     elif _is_two_rows_causal(last_k_range, k_range_for_this_row):
                         # the last row is the top row of a causal mask
                         if (
-                            last_q_range.size == 1
+                            last_q_range.seqlen == 1
                         ):  # the last row is not part of a full mask
                             q_ranges.last.end += 1
                             k_ranges.last.end += 1
@@ -256,7 +259,7 @@ class AttnMask(nn.Module):
                         if k_range_for_this_row.is_empty():
                             # this row is still of the top empty part of a causal mask
                             q_ranges.last.end += 1
-                        elif k_range_for_this_row.size == 1:
+                        elif k_range_for_this_row.seqlen == 1:
                             # this row is the top row of the non-empty part of a causal mask
                             q_ranges.last.end += 1
                             k_ranges.last = k_range_for_this_row

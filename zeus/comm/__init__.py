@@ -1,3 +1,8 @@
-from . import primitive
+from . import functional, primitive
+from .work import WorkWithPostProcessFn
 
-__all__ = ["primitive"]
+__all__ = [
+    "primitive",
+    "functional",
+    "WorkWithPostProcessFn",
+]

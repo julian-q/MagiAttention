@@ -11,7 +11,6 @@ class GroupCastCollectiveArg:
 
 @dataclass
 class CommMeta:
-    overlap_degree: int
     num_remote_tokens_per_overlap_stage: list[int] = field(
         default_factory=list, metadata={"help": "num tokens per overlap stage"}
     )
@@ -20,13 +19,15 @@ class CommMeta:
         metadata={"help": "group cast collective args list for each overlap stage"},
     )
 
+    @property
+    def overlap_degree(self) -> int:
+        return len(self.num_remote_tokens_per_overlap_stage)
+
     def __post_init__(self):
-        assert (
-            self.overlap_degree
-            == len(self.num_remote_tokens_per_overlap_stage)
-            == len(self.group_cast_collective_args_list)
+        assert len(self.num_remote_tokens_per_overlap_stage) == len(
+            self.group_cast_collective_args_list
         ), (
-            f"The {self.overlap_degree=}, but got inconsistent: "
+            f"Got inconsistent overlap degree: "
             f"{len(self.num_remote_tokens_per_overlap_stage)=} and "
             f"{len(self.group_cast_collective_args_list)=}."
         )

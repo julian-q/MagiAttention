@@ -1,3 +1,5 @@
+import os
+
 """
 comm
 common
@@ -46,3 +48,7 @@ TODO:
     4. comm-kernel
     5. abitrary-attn-mask(V2)
 """
+
+
+def is_sanity_check_enable() -> bool:
+    return os.environ.get("ZEUS_SANITY_CHECK", "0") == "1"

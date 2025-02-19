@@ -1,7 +1,7 @@
 import torch.distributed as dist
 
 from zeus.common import AttnRange, AttnRanges
-from zeus.common.enum import AttnMaskType, AttnRole, AttnType
+from zeus.common.enum import AttnMaskType, AttnRole, AttnType, DispatchAlgorithm
 from zeus.meta.collection import DispatchMeta
 from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
 from zeus.utils import (
@@ -12,7 +12,7 @@ from zeus.utils import (
     wrap_to_list,
 )
 
-from .dispatch_solver import DispatchAlgorithm, DispatchSolver
+from .dispatch_solver import DispatchSolver
 
 __all__ = [
     "calc_dispatch_meta_from_qk_ranges",
@@ -89,11 +89,11 @@ def calc_dispatch_meta_from_qk_ranges(
         num_chunks_q % cp_size == 0 and num_chunks_k % cp_size == 0
     ), f"Both {num_chunks_q=} and {num_chunks_k=} should be divisible by {cp_size=}."
 
-    assert q_ranges.size == k_ranges.size, (
+    assert len(q_ranges) == len(k_ranges), (
         f"The length of q_ranges and k_ranges (i.e. batch_size) should be the same, "
-        f"but got {q_ranges.size=}, {k_ranges.size=}."
+        f"but got {len(q_ranges)=}, {len(k_ranges)=}."
     )
-    batch_size = q_ranges.size
+    batch_size = len(q_ranges)
 
     attn_mask_type = wrap_to_list(attn_mask_type, broadcast_to_length=batch_size)
     assert (
@@ -358,7 +358,7 @@ def _calc_self_attn_areas(
             seqi_end = q_ranges[range_idx].end
             seqi_len_bottom = seqi_end - seqi_mid
 
-            attn_len = k_ranges[range_idx].size
+            attn_len = k_ranges[range_idx].seqlen
             attn_start, attn_end = (
                 k_ranges[range_idx].start,
                 k_ranges[range_idx].end,
@@ -374,6 +374,7 @@ def _calc_self_attn_areas(
             )
 
             # analyze this slice
+            # HACK: 后面会将计算面积的逻辑封装在AttnSlice中并且area只读, 这里保留直接设置area的功能
             if exceed_size <= 0:  # this bottom half of seqi should be all in this chunk
                 # set start and end for q_range of this slice
                 q_range_start, q_range_end = seqi_mid, seqi_end

@@ -3,7 +3,7 @@ from typing import Any, Callable
 
 from . import dist_common
 from .gt_dispatcher import GroundTruthDispatcher
-from .precision import assert_close, get_mask_from_ranges, torch_attn_ref
+from .precision import EPSILON, assert_close, get_mask_from_ranges, torch_attn_ref
 
 __all__ = [
     "dist_common",
@@ -12,6 +12,7 @@ __all__ = [
     "get_mask_from_ranges",
     "torch_attn_ref",
     "parameterize",
+    "EPSILON",
 ]
 
 
@@ -58,13 +59,21 @@ def parameterize(argument: str, values: list[Any]) -> Callable:
         values (list[Any]): a list of values to iterate for this argument
     """
 
-    def _wrapper(func):
-        def _execute_function_by_param(*args, **kwargs):
-            for val in values:
+    def _wrapper(func: Callable):
+        def _parameterized_func(*args, **kwargs):
+            for val_idx, val in enumerate(values):
                 arg_map = {argument: val}
                 partial_func = partial(func, **arg_map)
-                partial_func(*args, **kwargs)
+                try:
+                    partial_func(*args, **kwargs)
+                except Exception as e:
+                    error_msg = f"{argument}[{val_idx}]"
+                    if func.__name__ != "_parameterized_func":
+                        error_msg += f" raised the error:\n{e}\n"
+                    else:
+                        error_msg += f" x {e}"
+                    raise Exception(error_msg) from e
 
-        return _execute_function_by_param
+        return _parameterized_func
 
     return _wrapper

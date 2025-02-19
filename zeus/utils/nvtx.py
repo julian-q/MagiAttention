@@ -1,6 +1,13 @@
 import contextlib
+from functools import wraps
+from typing import Any, Callable, TypeVar, cast
 
 import torch
+
+# fixed the mypy type check missing bug
+# when a func is wrapped
+# issue: https://stackoverflow.com/questions/65621789/mypy-untyped-decorator-makes-function-my-method-untyped
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 @contextlib.contextmanager
@@ -16,7 +23,7 @@ def add_nvtx_event(event_name):
     torch.cuda.nvtx.range_pop()
 
 
-def instrument_nvtx(func):
+def instrument_nvtx(func: F) -> F:
     """
     Decorator that records an NVTX range for the duration of the function call.
 
@@ -27,9 +34,10 @@ def instrument_nvtx(func):
     - Wrapped function that is now being profiled.
     """
 
+    @wraps(func)
     def wrapped_fn(*args, **kwargs):
         with add_nvtx_event(func.__qualname__):
             ret_val = func(*args, **kwargs)
         return ret_val
 
-    return wrapped_fn
+    return cast(F, wrapped_fn)

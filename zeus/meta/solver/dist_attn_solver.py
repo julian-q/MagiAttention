@@ -1,7 +1,11 @@
+from collections import defaultdict
 from dataclasses import dataclass
 
+import torch
 import torch.distributed as dist
 
+import zeus
+from zeus.common.config import OverlapConfig
 from zeus.common.enum import AttnMaskType, AttnOverlapMode
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
@@ -9,8 +13,11 @@ from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
 from zeus.meta.collection.comm_meta import CommMeta, GroupCastCollectiveArg
 from zeus.meta.collection.dispatch_meta import DispatchMeta
 from zeus.meta.container.bucket import AttnBucket
-from zeus.meta.container.slice import AttnSlice
+from zeus.meta.container.chunk import AttnChunk
+from zeus.meta.container.slice import AttnSlice, MultiKAttnSlice
 from zeus.utils import nvtx, transpose_matrix
+
+from .overlap_solver import OverlapSolver, OverlapStageCost
 
 
 class AttnRangeWithRank(AttnRange):
@@ -75,13 +82,50 @@ class HostRankEntry:
     host_q_ranges_global: AttnRanges
     host_k_ranges_global: AttnRanges
     remote_k_ranges_global: AttnRanges
+    remote_k_ranges_global_per_chunk: list[AttnRanges]
 
     attn_calc_slice_global_list: list[AttnSlice]
     attn_calc_host_slice_local_list: list[AttnSlice]
-    attn_calc_remote_slice_local_list: list[AttnSlice]
 
-    # HACK: for multi-stage overlap
-    attn_calc_remote_k_ranges_global_list: list[AttnRanges]
+    # NOTE: this is a special attr to support multi-stage overlap
+    # each multik_slice of which contains a q_range_local and a k_ranges_global
+    # where the k_ranges_global won't be made local until the multi-stage overlap problem solved
+    attn_calc_remote_slice_list_per_chunk: list[list[MultiKAttnSlice]]
+
+    def __post_init__(self):
+        assert len(self.remote_k_ranges_global_per_chunk) == len(
+            self.attn_calc_remote_slice_list_per_chunk
+        ), (
+            f"The number of chunks is inconsistent: "
+            f"{len(self.remote_k_ranges_global_per_chunk)=}, {len(self.attn_calc_remote_slice_list_per_chunk)=}"
+        )
+
+    def get_host_calc_area(self) -> int:
+        """Get the host calc area"""
+        return sum(slice.area for slice in self.attn_calc_host_slice_local_list)
+
+    def get_remote_calc_area(self, chunk_idx: int | None = None) -> int:
+        """Get the remote calc area (w.r.t. a specific chunk)"""
+        if chunk_idx is None:  # return the remote calc area for all chunks
+            return sum(
+                slice.area
+                for slice_list in self.attn_calc_remote_slice_list_per_chunk
+                for slice in slice_list
+            )
+        return sum(
+            slice.area
+            for slice in self.attn_calc_remote_slice_list_per_chunk[chunk_idx]
+        )
+
+    def get_remote_comm_size(self, chunk_idx: int | None = None) -> int:
+        """Get the remote comm size (w.r.t. a specific chunk)"""
+        if chunk_idx is None:  # return the remote comm size for all chunks
+            return sum(
+                remote_k_ranges.total_seqlen
+                for remote_k_ranges in self.remote_k_ranges_global_per_chunk
+            )
+
+        return self.remote_k_ranges_global_per_chunk[chunk_idx].total_seqlen
 
 
 @dataclass
@@ -104,9 +148,9 @@ class TransferInfo:
 class TableEntry:
     """The entry dataclass for transfer table,
     where:
-        1. k_ranges_global: global k ranges to send w.r.t. to send rank's dispatch meta
-        2. k_ranges_local_in_send_buf: local k ranges to send w.r.t. to send rank's send buf
-        3. k_ranges_local_in_recv_buf: local k ranges to send w.r.t. to recv rank's recv buf
+        1. k_ranges_global: global k ranges to send w.r.t. send rank's dispatch meta
+        2. k_ranges_local_in_send_buf: local k ranges to send w.r.t. send rank's send buf
+        3. k_ranges_local_in_recv_buf: local k ranges to send w.r.t. recv rank's recv buf
     """
 
     k_ranges_global: AttnRanges
@@ -219,31 +263,30 @@ class TransferTable:
         NOTE: this is the special attribute that should NOT be passed in from outside,
         but ONLY constructed internally
         """
+
         self._transfer_table[send_rank][
             recv_rank
         ].k_ranges_local_in_recv_buf = remote_k_ranges_global_for_recv_rank.make_ranges_local(
-            self._transfer_table[send_rank][recv_rank].k_ranges_global
+            self._transfer_table[send_rank][recv_rank].k_ranges_global,
+            is_self_merged=True,
         )
 
 
 class AttnSolver:
+    """The attn solver class to process dispatch meta for calc meta and comm meta"""
+
+    @nvtx.instrument_nvtx
     def __init__(
         self,
         bucket_per_rank: list[AttnBucket],
         dispatch_meta_q: DispatchMeta,
-        dispatch_meta_kv: DispatchMeta,
+        dispatch_meta_k: DispatchMeta,
         cp_group_nccl: dist.ProcessGroup,
         cp_group_gloo: dist.ProcessGroup,
-        overlap_mode: AttnOverlapMode,
-        overlap_degree: int | None,
+        overlap_config: OverlapConfig,
     ):
         assert dist.get_backend(cp_group_nccl) == dist.Backend.NCCL
         assert dist.get_backend(cp_group_gloo) == dist.Backend.GLOO
-
-        # TODO: limited to static overlap mode with overlap degree = 1 for now
-        assert (
-            overlap_mode is AttnOverlapMode.STATIC and overlap_degree == 1
-        ), "For now, only supports static overlap mode with overlap degree 1."
 
         self.cp_rank = dist.get_rank(cp_group_nccl)
         self.cp_size = dist.get_world_size(cp_group_nccl)
@@ -251,38 +294,44 @@ class AttnSolver:
         self.cp_group_nccl = cp_group_nccl
         self.cp_group_gloo = cp_group_gloo
 
-        self.overlap_mode = overlap_mode
-        # NOTE: this is the initial overlap degree,
-        # which might be changed after overlap solver if overlap mode is dynamic
-        self.overlap_degree = overlap_degree
+        self.overlap_config = overlap_config
+        self.overlap_solver = OverlapSolver(alg=self.overlap_config.alg)
 
+        # NOTE: the real overlap degree should be determined in the later code:
+        # 1. if overlap mode is static, then its real value equals to the one in the overlap config
+        # 2. if overlap mode is dynamic, then its real value is determined by overlap solver
+        self.overlap_degree: int = -1
+
+        # NOTE: the real overlap chunk size and the number of chunks should be determined in the later code:
+        # 1. if the remote length is not too long (num_chunks <= max_num_chunks),
+        #   then use the 'min_chunk_size' to chunk it, i.e. overlap_chunk_size = min_chunk_size
+        # 2. otherwise, use the 'max_num_chunks' to calc a larger chunk size
+        #   and assign it as overlap_chunk_size, i.e. overlap_num_chunks = max_num_chunks
+        self.overlap_chunk_size: int = -1
+        self.overlap_num_chunks: int = -1
+
+        # init host / remote q/k ranges global for this rank
         bucket_this_rank = bucket_per_rank[self.cp_rank]
-
-        # init host q_ranges global for this rank
-        host_q_ranges_global_this_rank = dispatch_meta_q.host_ranges_per_rank[
-            self.cp_rank
-        ].merge()
-        assert host_q_ranges_global_this_rank.is_merged()
-
-        # init host k_ranges global for this rank
-        host_k_ranges_global_this_rank = dispatch_meta_kv.host_ranges_per_rank[
-            self.cp_rank
-        ].merge()
-        assert host_k_ranges_global_this_rank.is_merged()
-
-        # init remote k_ranges global for this rank
-        remote_k_ranges_global_this_rank = bucket_this_rank.k_ranges.find_hole_ranges(
-            host_k_ranges_global_this_rank
+        (
+            host_q_ranges_global_this_rank,
+            host_k_ranges_global_this_rank,
+            remote_k_ranges_global_this_rank,
+        ) = self._init_host_remote_ranges_global_this_rank(
+            dispatch_meta_q=dispatch_meta_q,
+            dispatch_meta_k=dispatch_meta_k,
+            bucket_this_rank=bucket_this_rank,
         )
-        assert remote_k_ranges_global_this_rank.is_merged()
+
+        self.bucket = bucket_this_rank
+        self.host_q_ranges_global = host_q_ranges_global_this_rank
+        self.host_k_ranges_global = host_k_ranges_global_this_rank
+        self.remote_k_ranges_global = remote_k_ranges_global_this_rank
 
         # init host rank entry for this rank
         self.host_rank_entry_this_rank = self._init_host_rank_entry_this_rank(
             host_q_ranges_global=host_q_ranges_global_this_rank,
             host_k_ranges_global=host_k_ranges_global_this_rank,
             remote_k_ranges_global=remote_k_ranges_global_this_rank,
-            attn_calc_q_ranges_global=bucket_this_rank.q_ranges,
-            attn_calc_k_ranges_global=bucket_this_rank.k_ranges,
             attn_calc_slice_global_list=bucket_this_rank.attn_slices,
         )
 
@@ -301,16 +350,55 @@ class AttnSolver:
         )
 
         # init transfer table per stage
-        self.transfer_table_per_stage: list[TransferTable] = []
-        for stage, remote_rank_entry_per_rank_this_stage in enumerate(
-            self.remote_rank_entry_per_rank_per_stage
-        ):
-            self.transfer_table_per_stage.append(
-                self._init_transfer_table_for_one_stage(
-                    stage,
-                    remote_rank_entry_per_rank_this_stage,
-                )
+        self.transfer_table_per_stage: list[
+            TransferTable
+        ] = self._init_transfer_table_per_stage(
+            self.remote_rank_entry_per_rank_per_stage,
+        )
+
+    @nvtx.instrument_nvtx
+    def _init_host_remote_ranges_global_this_rank(
+        self,
+        dispatch_meta_q: DispatchMeta,
+        dispatch_meta_k: DispatchMeta,
+        bucket_this_rank: AttnBucket,
+    ) -> tuple[AttnRanges, AttnRanges, AttnRanges]:
+        # init host q_ranges global for this rank
+        host_q_ranges_global_this_rank = dispatch_meta_q.host_ranges_per_rank[
+            self.cp_rank
+        ].merge()
+
+        # init host k_ranges global for this rank
+        host_k_ranges_global_this_rank = dispatch_meta_k.host_ranges_per_rank[
+            self.cp_rank
+        ].merge()
+
+        # init remote k_ranges global for this rank
+        remote_k_ranges_global_this_rank = bucket_this_rank.k_ranges.find_hole_ranges(
+            host_k_ranges_global_this_rank,
+            is_other_merged=True,
+        )
+
+        # sanity check
+        if zeus.is_sanity_check_enable():
+            # check if merged successfully
+            assert host_q_ranges_global_this_rank.is_merged()
+            assert host_k_ranges_global_this_rank.is_merged()
+            assert remote_k_ranges_global_this_rank.is_merged()
+
+            # whether q_ranges and k_ranges are one-one mapping in attn calc
+            attn_calc_q_ranges_global = bucket_this_rank.q_ranges
+            attn_calc_k_ranges_global = bucket_this_rank.k_ranges
+            assert len(attn_calc_q_ranges_global) == len(attn_calc_k_ranges_global), (
+                f"The {len(attn_calc_q_ranges_global)=} should be equal to "
+                f"{len(attn_calc_k_ranges_global)=}."
             )
+
+        return (
+            host_q_ranges_global_this_rank,
+            host_k_ranges_global_this_rank,
+            remote_k_ranges_global_this_rank,
+        )
 
     @nvtx.instrument_nvtx
     def _init_host_rank_entry_this_rank(
@@ -318,120 +406,326 @@ class AttnSolver:
         host_q_ranges_global: AttnRanges,
         host_k_ranges_global: AttnRanges,
         remote_k_ranges_global: AttnRanges,
-        attn_calc_q_ranges_global: AttnRanges,
-        attn_calc_k_ranges_global: AttnRanges,
         attn_calc_slice_global_list: list[AttnSlice],
     ) -> HostRankEntry:
-        assert len(attn_calc_q_ranges_global) == len(attn_calc_k_ranges_global), (
-            f"The {len(attn_calc_q_ranges_global)=} should be equal to "
-            f"{len(attn_calc_k_ranges_global)=}."
+        """Initialize host rank entry for this rank"""
+
+        # -------   chunk remote k ranges global  ------ #
+
+        remote_k_ranges_global_per_chunk = self._chunk_remote_k_ranges_global(
+            remote_k_ranges_global=remote_k_ranges_global,
         )
 
-        attn_calc_host_slice_local_list = []
-        attn_calc_remote_slice_local_list = []
-        attn_calc_remote_k_ranges_global_list = []
-        for ith_attn_slice_global in attn_calc_slice_global_list:
-            worker = AttnRanges()
-            worker.append(ith_attn_slice_global.k_range)  # type: ignore
-            ith_attn_calc_host_k_ranges_global = worker.find_overlap_ranges(
-                host_k_ranges_global
-            )
-            ith_attn_calc_remote_k_ranges_global = worker.find_hole_ranges(
-                host_k_ranges_global
+        # -------   calc attn calc host q ranges local  ------ #
+
+        attn_calc_global_chunk = AttnChunk(q_slices=attn_calc_slice_global_list)
+        attn_calc_host_q_ranges_local = host_q_ranges_global.make_ranges_local(
+            attn_calc_global_chunk.q_ranges,
+            is_self_merged=True,
+        )
+
+        # -------   make attn calc host/remote slices  ------ #
+
+        attn_calc_host_slice_local_list: list[AttnSlice] = []
+        attn_calc_remote_slice_list_per_chunk: list[list[MultiKAttnSlice]] = [
+            [] for _ in range(len(remote_k_ranges_global_per_chunk))
+        ]
+
+        for ith_attn_slice_global, ith_attn_calc_host_q_range_local in zip(
+            attn_calc_slice_global_list,
+            attn_calc_host_q_ranges_local,
+        ):
+            ith_attn_slice_global_mask_type: AttnMaskType = ith_attn_slice_global.mask_type  # type: ignore
+            # HACK: wrap k range to k ranges,
+            # to use the API of AttnRanges like find_overlap_ranges
+            ith_attn_calc_k_ranges_global = AttnRanges()
+            ith_attn_calc_k_ranges_global.append(ith_attn_slice_global.k_range)  # type: ignore
+
+            # -------   make ith attn calc host slice local  ------ #
+
+            self._make_ith_attn_calc_host_slice_local(
+                host_k_ranges_global=host_k_ranges_global,
+                attn_calc_host_slice_local_list=attn_calc_host_slice_local_list,
+                ith_attn_calc_host_q_range_local=ith_attn_calc_host_q_range_local,
+                ith_attn_calc_k_ranges_global=ith_attn_calc_k_ranges_global,
+                ith_attn_slice_global_mask_type=ith_attn_slice_global_mask_type,
             )
 
-            ith_attn_calc_host_k_ranges_local = host_k_ranges_global.make_ranges_local(
-                ith_attn_calc_host_k_ranges_global
-            ).merge()
-            ith_attn_calc_remote_k_ranges_local = (
-                remote_k_ranges_global.make_ranges_local(
-                    ith_attn_calc_remote_k_ranges_global
-                ).merge()
+            # -------   make ith attn calc remote slice per chunk  ------ #
+
+            self._make_ith_attn_calc_remote_slice_per_chunk(
+                remote_k_ranges_global_per_chunk=remote_k_ranges_global_per_chunk,
+                attn_calc_remote_slice_list_per_chunk=attn_calc_remote_slice_list_per_chunk,
+                ith_attn_calc_host_q_range_local=ith_attn_calc_host_q_range_local,
+                ith_attn_calc_k_ranges_global=ith_attn_calc_k_ranges_global,
+                ith_attn_slice_global_mask_type=ith_attn_slice_global_mask_type,
             )
-
-            # attn的host_k_ranges和remote_k_ranges满足连续性, merge完成之后最多只剩一个range
-            # 为0则代表没有k_ranges在host上或者在remote上
-            assert (
-                len(ith_attn_calc_host_k_ranges_local) <= 1
-            ), f"{ith_attn_calc_host_k_ranges_local=}, {ith_attn_calc_host_k_ranges_global=}"
-            assert (
-                len(ith_attn_calc_remote_k_ranges_local) <= 1
-            ), f"{ith_attn_calc_remote_k_ranges_local=}, {ith_attn_calc_remote_k_ranges_global=}"
-
-            ith_attn_calc_host_q_range_local = host_q_ranges_global.make_range_local(
-                ith_attn_slice_global.q_range
-            )
-
-            # HACK: 目前还没有考虑causal的setting, 因此全都是full-attn,
-            # 也就是ith_attn_slice.mask_type = AttnMaskType.FULL
-            if len(ith_attn_calc_host_k_ranges_local) == 1:
-                attn_calc_host_slice_local_list.append(
-                    AttnSlice(
-                        q_range=ith_attn_calc_host_q_range_local,
-                        k_range=ith_attn_calc_host_k_ranges_local[0],
-                        mask_type=ith_attn_slice_global.mask_type,
-                    )
-                )
-            if len(ith_attn_calc_remote_k_ranges_local) == 1:
-                attn_calc_remote_slice_local_list.append(
-                    AttnSlice(
-                        q_range=ith_attn_calc_host_q_range_local,
-                        k_range=ith_attn_calc_remote_k_ranges_local[0],
-                        mask_type=ith_attn_slice_global.mask_type,
-                    )
-                )
-                attn_calc_remote_k_ranges_global_list.append(
-                    ith_attn_calc_remote_k_ranges_global
-                )
 
         host_rank_entry_this_rank = HostRankEntry(
             host_q_ranges_global=host_q_ranges_global,
             host_k_ranges_global=host_k_ranges_global,
             remote_k_ranges_global=remote_k_ranges_global,
+            remote_k_ranges_global_per_chunk=remote_k_ranges_global_per_chunk,
             attn_calc_slice_global_list=attn_calc_slice_global_list,
             attn_calc_host_slice_local_list=attn_calc_host_slice_local_list,
-            attn_calc_remote_slice_local_list=attn_calc_remote_slice_local_list,
-            attn_calc_remote_k_ranges_global_list=attn_calc_remote_k_ranges_global_list,
+            attn_calc_remote_slice_list_per_chunk=attn_calc_remote_slice_list_per_chunk,
         )
 
+        # DE-BUG: log host_rank_entry_this_rank
+        # from zeus.utils import write_rank
+        # write_rank(repr(host_rank_entry_this_rank), "host_rank_entry_this_rank.log")
+
         return host_rank_entry_this_rank
+
+    @nvtx.instrument_nvtx
+    def _chunk_remote_k_ranges_global(
+        self,
+        remote_k_ranges_global: AttnRanges,
+    ) -> list[AttnRanges]:
+        """Chunk remote k ranges global for multi-stage overlap
+        called in 'self._init_host_rank_entry_this_rank'
+        """
+
+        # determine the chunk size constrainted by min_chunk_size and max_num_chunks
+        total_remote_k_seqlen = remote_k_ranges_global.total_seqlen
+        num_chunks = (
+            total_remote_k_seqlen + self.overlap_config.min_chunk_size - 1
+        ) // self.overlap_config.min_chunk_size
+        if num_chunks <= self.overlap_config.max_num_chunks:
+            self.overlap_chunk_size = self.overlap_config.min_chunk_size
+            self.overlap_num_chunks = num_chunks
+        else:
+            self.overlap_num_chunks = self.overlap_config.max_num_chunks
+            self.overlap_chunk_size = (
+                total_remote_k_seqlen + self.overlap_num_chunks - 1
+            ) // self.overlap_num_chunks
+
+        # chunk the remote k ranges global for multi-stage overlapping
+        remote_k_ranges_global_per_chunk: list[
+            AttnRanges
+        ] = remote_k_ranges_global.chunk(self.overlap_chunk_size)
+
+        # sanity check
+        if zeus.is_sanity_check_enable():
+            assert all(
+                remote_k_ranges_global_ith_chunk.is_merged()
+                for remote_k_ranges_global_ith_chunk in remote_k_ranges_global_per_chunk
+            ), (
+                f"Every remote_k_ranges_global for each chunk should be merged, "
+                f"but {remote_k_ranges_global_per_chunk=}."
+            )
+            assert len(remote_k_ranges_global_per_chunk) == self.overlap_num_chunks, (
+                f"{len(remote_k_ranges_global_per_chunk)=} should be equal "
+                f"to {self.overlap_num_chunks=} with {self.overlap_chunk_size=}"
+            )
+
+        return remote_k_ranges_global_per_chunk
+
+    @nvtx.instrument_nvtx
+    def _make_ith_attn_calc_host_slice_local(
+        self,
+        host_k_ranges_global: AttnRanges,
+        attn_calc_host_slice_local_list: list[AttnSlice],
+        ith_attn_calc_host_q_range_local: AttnRange,
+        ith_attn_calc_k_ranges_global: AttnRanges,
+        ith_attn_slice_global_mask_type: AttnMaskType,
+    ) -> None:
+        """Make attn calc host slice local, appended to 'attn_calc_host_slice_local_list'
+        called in 'self._init_host_rank_entry_this_rank'
+        """
+
+        # -------   calc ith attn calc host k ranges local  ------ #
+
+        # fine the overlap part with the global host k ranges
+        # i.e. the global attn calc host k ranges
+        ith_attn_calc_host_k_ranges_global = (
+            ith_attn_calc_k_ranges_global.find_overlap_ranges(
+                host_k_ranges_global,
+                is_self_merged=True,
+                is_other_merged=True,
+            )
+        )
+
+        # make it local in the global host k ranges
+        ith_attn_calc_host_k_ranges_local = host_k_ranges_global.make_ranges_local(
+            ith_attn_calc_host_k_ranges_global,
+            is_self_merged=True,
+        ).merge()
+
+        # sanity check
+        if zeus.is_sanity_check_enable():
+            # attn的host_k_ranges满足连续性, merge完成之后最多只剩一个range, 为0则代表没有k_ranges在host上
+            assert (
+                len(ith_attn_calc_host_k_ranges_local) <= 1
+            ), f"{ith_attn_calc_host_k_ranges_local=}, {ith_attn_calc_host_k_ranges_global=}"
+
+        # -------   make ith attn calc host slice local if available  ------ #
+
+        # HACK: 目前还没有考虑causal的setting, 因此全都是full-attn,
+        # 也就是ith_attn_slice.mask_type = AttnMaskType.FULL, 同时面积也直接就是矩形mask的面积
+        if len(ith_attn_calc_host_k_ranges_local) == 1:
+            attn_calc_host_slice_local_list.append(
+                AttnSlice(
+                    q_range=ith_attn_calc_host_q_range_local,
+                    k_range=ith_attn_calc_host_k_ranges_local[0],
+                    mask_type=ith_attn_slice_global_mask_type,
+                )
+            )
+
+    @nvtx.instrument_nvtx
+    def _make_ith_attn_calc_remote_slice_per_chunk(
+        self,
+        remote_k_ranges_global_per_chunk: list[AttnRanges],
+        attn_calc_remote_slice_list_per_chunk: list[list[MultiKAttnSlice]],
+        ith_attn_calc_host_q_range_local: AttnRange,
+        ith_attn_calc_k_ranges_global: AttnRanges,
+        ith_attn_slice_global_mask_type: AttnMaskType,
+    ) -> None:
+        """Make attn calc remote slice for each chunk, appended to 'attn_calc_remote_slice_list_per_chunk'
+        called in'self._init_host_rank_entry_this_rank'
+        """
+
+        for j, jth_chunk_remote_k_ranges_global in enumerate(
+            remote_k_ranges_global_per_chunk
+        ):
+            # -------   calc ith attn calc remote k ranges global for jth chunk  ------ #
+
+            # find the overlap part in the global remote k ranges for jth chunk
+            ith_attn_calc_remote_k_ranges_global_for_jth_chunk = (
+                ith_attn_calc_k_ranges_global.find_overlap_ranges(
+                    jth_chunk_remote_k_ranges_global,
+                    is_self_merged=True,
+                    is_other_merged=True,
+                )
+            )
+
+            # -------   make ith attn calc remote slice for jth chunk if available  ------ #
+
+            # HACK: 目前还没有考虑causal的setting, 因此全都是full-attn,
+            # 也就是ith_attn_slice.mask_type = AttnMaskType.FULL, 同时面积也直接就是矩形mask的面积
+            if len(ith_attn_calc_remote_k_ranges_global_for_jth_chunk) > 0:
+                attn_calc_remote_slice_list_per_chunk[j].append(
+                    MultiKAttnSlice(
+                        q_range=ith_attn_calc_host_q_range_local,
+                        k_ranges=ith_attn_calc_remote_k_ranges_global_for_jth_chunk,
+                        mask_types=[ith_attn_slice_global_mask_type]
+                        * len(ith_attn_calc_remote_k_ranges_global_for_jth_chunk),
+                    )
+                )
 
     @nvtx.instrument_nvtx
     def _init_remote_rank_entry_per_stage_this_rank(
         self,
         host_rank_entry_this_rank: HostRankEntry,
     ) -> list[RemoteRankEntry]:
-        if self.overlap_mode is AttnOverlapMode.STATIC and self.overlap_degree == 1:
-            # HACK: for now, only support static mode with overlap degree 1,
-            # which constructs remote rank entry just by copying from host rank entry
-            remote_rank_entry_per_stage_this_rank = [
-                RemoteRankEntry(
+        """Initialize remote rank entry per overlap stage for this rank"""
+
+        remote_rank_entry_per_stage_this_rank: list[RemoteRankEntry] = []
+
+        if not self.overlap_config.enable:
+            # HACK: this is a deprecated branch to roll back to the status w/o multi-stage overlap
+            # which is equal to:
+            #   1. static overlap mode (guaranteed by the overlap config)
+            #   2. overlap degree == 1 (guaranteed by the overlap config)
+            #   3. (max) num chunks == 1 (guaranteed by the overlap config)
+            self.overlap_degree = 1
+
+            if zeus.is_sanity_check_enable():
+                assert (
+                    self.overlap_num_chunks == 1
+                ), f"The {self.overlap_num_chunks=} must be 1 with {self.overlap_chunk_size=}"
+
+            # since num chunks == 1, we can directly extract the first chunk
+            remote_multik_slice_global_list = (
+                host_rank_entry_this_rank.attn_calc_remote_slice_list_per_chunk[0]
+            )
+
+            remote_slice_local_list: list[AttnSlice] = []
+            for multik_slice in remote_multik_slice_global_list:
+                k_ranges_local = (
+                    host_rank_entry_this_rank.remote_k_ranges_global.make_ranges_local(
+                        multik_slice.k_ranges,  # type: ignore
+                        is_self_merged=True,
+                    ).merge()
+                )
+
+                if zeus.is_sanity_check_enable():
+                    # attn的remote_k_ranges满足连续性（不管有没有被chunk）, merge完成之后最多只剩一个range
+                    # 为0则代表没有k_ranges在（这个chunk所截取的）remote上
+                    assert (
+                        len(k_ranges_local) <= 1
+                    ), f"{k_ranges_local=}, {host_rank_entry_this_rank.remote_k_ranges_global=}"
+
+                if len(k_ranges_local) == 1:
+                    remote_slice_local_list.append(
+                        AttnSlice(
+                            q_range=multik_slice.q_range,
+                            k_range=k_ranges_local[0],  # type: ignore
+                            mask_type=multik_slice.mask_types[0],  # type: ignore
+                        )
+                    )
+
+            remote_rank_entry_per_stage_this_rank.append(
+                RemoteRankEntry(  # HACK: construct remote rank entry just by copying from host rank entry
                     host_k_ranges_global=host_rank_entry_this_rank.host_k_ranges_global,
                     remote_k_ranges_global=host_rank_entry_this_rank.remote_k_ranges_global,
-                    attn_calc_remote_slice_local_list=host_rank_entry_this_rank.attn_calc_remote_slice_local_list,
+                    attn_calc_remote_slice_local_list=remote_slice_local_list,
                 )
-            ]
-        else:
-            raise NotImplementedError("TODO: support overlap solver")
+            )
+
+            # DE-BUG: log remote_rank_entry_per_stage_this_rank
+            # from zeus.utils import write_rank
+            # write_rank(
+            #     repr(remote_rank_entry_per_stage_this_rank),
+            #     "remote_rank_entry_per_stage_this_rank_rollback.log",
+            # )
+
+            return remote_rank_entry_per_stage_this_rank
+
+        # -------   caculate calc/comm cost pairs  ------ #
+
+        chunk_costs = self._calc_cost_pairs_per_chunk(
+            host_rank_entry_this_rank=host_rank_entry_this_rank,
+        )
+
+        # ------    solve the multi-stage overlap problem   ------ #
+        # ------    and get chunk partitions for each stage   ------ #
+
+        cost_partitions = self._solve_multi_stage_overlap(
+            chunk_costs=chunk_costs,
+        )
+
+        # ------    caculate remote rank entry for each stage   ------ #
+
+        remote_rank_entry_per_stage_this_rank = self._calc_remote_rank_entry_per_stage(
+            host_rank_entry_this_rank=host_rank_entry_this_rank,
+            cost_partitions=cost_partitions,
+        )
 
         return remote_rank_entry_per_stage_this_rank
 
+    @nvtx.instrument_nvtx
     def _init_remote_rank_entry_per_rank_per_stage(
         self, remote_rank_entry_per_stage_this_rank: list[RemoteRankEntry]
     ) -> list[list[RemoteRankEntry]]:
+        """Initialize remote rank entry per rank for each overlap stage"""
+
         # all gather remote rank entry per stage from each rank
         remote_rank_entry_per_stage_per_rank = [None] * self.cp_size
-        dist.all_gather_object(
-            remote_rank_entry_per_stage_per_rank,
-            remote_rank_entry_per_stage_this_rank,
-            group=self.cp_group_nccl,
-        )
+
+        with nvtx.add_nvtx_event("remote_rank_entry_ag"):
+            dist.all_gather_object(
+                remote_rank_entry_per_stage_per_rank,
+                remote_rank_entry_per_stage_this_rank,
+                group=self.cp_group_nccl,
+            )
 
         # check shape to be [cp_size, overlap_degree]
-        assert (
-            len(remote_rank_entry_per_stage_per_rank) == self.cp_size
-            and len(remote_rank_entry_per_stage_per_rank[0]) == self.overlap_degree  # type: ignore
-        )
+        if zeus.is_sanity_check_enable():
+            assert (
+                len(remote_rank_entry_per_stage_per_rank) == self.cp_size
+                and len(remote_rank_entry_per_stage_per_rank[0]) == self.overlap_degree  # type: ignore
+            )
 
         # transpose to be remote rank entry per rank for each stage
         remote_rank_entry_per_rank_per_stage = transpose_matrix(
@@ -439,12 +733,295 @@ class AttnSolver:
         )
 
         # check shape to be [overlap_degree, cp_size]
-        assert (
-            len(remote_rank_entry_per_rank_per_stage) == self.overlap_degree
-            and len(remote_rank_entry_per_rank_per_stage[0]) == self.cp_size
-        )
+        if zeus.is_sanity_check_enable():
+            assert (
+                len(remote_rank_entry_per_rank_per_stage) == self.overlap_degree
+                and len(remote_rank_entry_per_rank_per_stage[0]) == self.cp_size
+            )
 
         return remote_rank_entry_per_rank_per_stage
+
+    @nvtx.instrument_nvtx
+    def _calc_cost_pairs_per_chunk(
+        self,
+        host_rank_entry_this_rank: HostRankEntry,
+    ) -> list[OverlapStageCost]:
+        """Calculate the calc/comm cost pairs for each chunk
+        called in 'self._init_remote_rank_entry_per_stage_this_rank'
+        """
+        # 1-1. host comm cost (must be 0. since no comm needs to be waited)
+        host_comm_cost = 0.0
+
+        # 1-2. host calc cost
+        host_calc_area = host_rank_entry_this_rank.get_host_calc_area()
+        host_calc_cost = self.overlap_config.calc_cost_factor * host_calc_area
+
+        # 2-1. remote comm cost for each chunk
+        remote_comm_size_per_chunk = [
+            host_rank_entry_this_rank.get_remote_comm_size(chunk_idx)
+            for chunk_idx in range(self.overlap_num_chunks)
+        ]
+        remote_comm_cost_per_chunk = [
+            self.overlap_config.comm_cost_factor * comm_size
+            for comm_size in remote_comm_size_per_chunk
+        ]
+
+        # 2-2. remote calc cost for each chunk
+        remote_calc_area_per_chunk = [
+            host_rank_entry_this_rank.get_remote_calc_area(chunk_idx)
+            for chunk_idx in range(self.overlap_num_chunks)
+        ]
+        remote_calc_cost_per_chunk = [
+            self.overlap_config.calc_cost_factor * remote_calc_area
+            for remote_calc_area in remote_calc_area_per_chunk
+        ]
+
+        # 3-1. construct the stage cost pairs for each chunk
+        chunk_costs = [
+            OverlapStageCost(
+                comm_cost=comm_cost,
+                calc_cost=calc_cost,
+            )
+            for comm_cost, calc_cost in zip(
+                [host_comm_cost] + remote_comm_cost_per_chunk,
+                [host_calc_cost] + remote_calc_cost_per_chunk,
+            )
+        ]
+
+        # 3-2. sanity check
+        assert (
+            len(chunk_costs) == self.overlap_num_chunks + 1
+        ), f"{len(chunk_costs)=}, {self.overlap_num_chunks=}"
+
+        return chunk_costs
+
+    @nvtx.instrument_nvtx
+    def _solve_multi_stage_overlap(
+        self,
+        chunk_costs: list[OverlapStageCost],
+    ) -> list[list[int]]:
+        """Solve the multi-stage overlap problem with the overlap solver
+        called in'self._init_remote_rank_entry_per_stage_this_rank'
+
+        Args:
+            chunk_costs: list of OverlapStageCost, each element is the cost pair for one chunk
+
+        Returns:
+            cost_partitions: list of list of int, each element is the chunk partition for one stage
+        """
+
+        # overlap solver will return the solution with the partitions of the chunk costs,
+        # which is a list with length 'overlap_degree',
+        # where the ith elem is a chunk idx list that
+        # contains the chunk idxs that need be processed together in the ith stage
+        # e.g. [[0, 2], [1, 4], [3, 5]] for 6 chunks and 3 overlap degree
+        best_solution, solution_dict = self.overlap_solver.solve(
+            stage_costs=chunk_costs,
+            overlap_degree=self.overlap_config.degree,
+            dynamic_max_degree=self.overlap_config.dynamic_max_degree,
+            **self.overlap_config.alg_kwargs,
+        )
+
+        # get the cost partitions of 1 host cost pair and n remote cost pairs
+        cost_partitions = best_solution.partitions
+        # sanity check
+        assert (
+            0 in cost_partitions[0]
+        ), f"The host cost with index 0 must be in the first partition, but got {cost_partitions=}"
+
+        # get the overlap degree w.r.t the best solution
+        best_overlap_degree_this_rank = best_solution.overlap_degree
+        if self.overlap_config.mode is AttnOverlapMode.STATIC:
+            if zeus.is_sanity_check_enable():
+                assert best_overlap_degree_this_rank == self.overlap_config.degree, (
+                    f"in static mode, {best_overlap_degree_this_rank=} "
+                    f"should be equal to {self.overlap_config.degree=}"
+                )
+
+            # if static mode, then each rank already has the same overlap degree
+            # so there's no need to reduce and the overlap degree is the same as the config
+            self.overlap_degree = best_overlap_degree_this_rank
+        elif self.overlap_config.mode is AttnOverlapMode.DYNAMIC:
+            # if dynamic mode, the final overlap degree is the maximum one among ranks
+            # so we need to reduce the best overlap degree among ranks
+            with nvtx.add_nvtx_event("dynamic_overlap_degree_ar_max"):
+                overlap_degree_reduce_tensor = torch.tensor(
+                    best_overlap_degree_this_rank,
+                    dtype=torch.int32,
+                    device=torch.cuda.current_device(),
+                )
+                dist.all_reduce(
+                    overlap_degree_reduce_tensor,
+                    op=dist.ReduceOp.MAX,
+                    group=self.cp_group_nccl,
+                )
+                final_overlap_degree = overlap_degree_reduce_tensor.item()
+
+            for _ in range(best_overlap_degree_this_rank, final_overlap_degree):
+                # HACK: for the rank with the best overlap degree < final overlap degree
+                # we just append the idle stages to the last of the cost partitions
+                cost_partitions.append([])
+
+            self.overlap_degree = final_overlap_degree
+        else:
+            raise ValueError(f"Unknown overlap mode: {self.overlap_config.mode}")
+
+        # sanity check
+        if zeus.is_sanity_check_enable():
+            assert (
+                len(cost_partitions) == self.overlap_degree
+            ), f"{len(cost_partitions)=}, {self.overlap_degree=}"
+
+        # DE-BUG: log vars related to overlap solver I/O
+        # from zeus.utils import write_rank
+        # write_rank(
+        #     msg=(
+        #         f"{best_overlap_degree_this_rank=} | {self.overlap_degree=} \n\n"
+        #         f"| {self.overlap_config=} | \n\n"
+        #         f"{len(chunk_costs)=} | {chunk_costs=} | \n\n"
+        #         f"{len(cost_partitions)=} | {cost_partitions=} | \n\n"
+        #         f"{len(solution_dict)=} | {solution_dict=} | \n\n"
+        #     ),
+        #     path="overlap_solver_io.log",
+        # )
+
+        return cost_partitions
+
+    @nvtx.instrument_nvtx
+    def _calc_remote_rank_entry_per_stage(
+        self,
+        cost_partitions: list[list[int]],
+        host_rank_entry_this_rank: HostRankEntry,
+    ) -> list[RemoteRankEntry]:
+        """Calculate the remote rank entry per stage for this rank
+        called in 'self._init_remote_rank_entry_per_stage_this_rank'
+        """
+
+        remote_rank_entry_per_stage_this_rank: list[RemoteRankEntry] = []
+
+        for cost_partition in cost_partitions:
+            remote_rank_entry_per_stage_this_rank.append(
+                self._calc_remote_rank_entry_for_one_stage(
+                    cost_partiton=cost_partition,
+                    host_rank_entry_this_rank=host_rank_entry_this_rank,
+                )
+            )
+
+        # DE-BUG: log remote_rank_entry_per_stage_this_rank
+        # from zeus.utils import write_rank
+        # write_rank(
+        #     repr(remote_rank_entry_per_stage_this_rank),
+        #     "remote_rank_entry_per_stage_this_rank.log",
+        # )
+
+        return remote_rank_entry_per_stage_this_rank
+
+    @nvtx.instrument_nvtx
+    def _calc_remote_rank_entry_for_one_stage(
+        self, cost_partiton: list[int], host_rank_entry_this_rank: HostRankEntry
+    ) -> RemoteRankEntry:
+        """Calculate the remote rank entry for one stage for this rank
+        called in'self._calc_remote_rank_entry_per_stage'
+        """
+
+        # ------    merge the chunks into one overlap stage within each partition  ------ #
+        # ------    and construct the remote rank entry for each stage   ------ #
+
+        # init the args and some temp vars for remote rank entry
+        remote_k_ranges_global_this_stage = AttnRanges()
+        attn_calc_remote_slice_list_per_chunk_this_stage: list[
+            list[MultiKAttnSlice]
+        ] = []
+        attn_calc_remote_slice_local_list_this_stage: list[AttnSlice] = []
+
+        # find the remote_ k_ranges_global and remote_slice_local_list
+        # within the chunks for this stage
+        for cost_idx in cost_partiton:
+            if cost_idx == 0:  # ignore the host cost
+                continue
+            chunk_idx = cost_idx - 1
+            remote_k_ranges_global_this_stage.extend(
+                host_rank_entry_this_rank.remote_k_ranges_global_per_chunk[chunk_idx]
+            )
+            attn_calc_remote_slice_list_per_chunk_this_stage.append(
+                host_rank_entry_this_rank.attn_calc_remote_slice_list_per_chunk[
+                    chunk_idx
+                ]
+            )
+        remote_k_ranges_global_this_stage = remote_k_ranges_global_this_stage.merge()
+
+        # HACK: since now only supporting all full mask,
+        # then all q ranges are aligned to each other among chunks
+        # so we define a mapping as a dict (key: q_range, value: k_ranges)
+        map_slice_q_range_to_k_ranges: defaultdict[AttnRange, AttnRanges] = defaultdict(
+            AttnRanges
+        )
+        for slice_list in attn_calc_remote_slice_list_per_chunk_this_stage:
+            for slice in slice_list:
+                map_slice_q_range_to_k_ranges[slice.q_range].extend(  # type: ignore
+                    slice.k_ranges  # type: ignore
+                )
+
+        # construct the attn_calc_remote_slice_local_list_this_stage
+        slice_tuples: list[tuple[AttnRange, AttnRanges]] = sorted(
+            map_slice_q_range_to_k_ranges.items(),
+            key=lambda t: t[0].start,  # sort by q_range.start
+        )
+        for q_range, k_ranges in slice_tuples:
+            k_ranges = remote_k_ranges_global_this_stage.make_ranges_local(
+                k_ranges,
+                is_self_merged=True,
+            ).merge()
+
+            if zeus.is_sanity_check_enable():
+                # attn的remote_k_ranges满足连续性（不管有没有被chunk）, merge完成之后最多只剩一个range
+                # 为0则代表没有k_ranges在（这个chunk所截取的）remote上
+                assert (
+                    len(k_ranges) <= 1
+                ), f"{k_ranges=}, {remote_k_ranges_global_this_stage=}"
+
+            # HACK: 目前还没有考虑causal的setting, 因此全都是full-attn,
+            # 也就是ith_attn_slice.mask_type = AttnMaskType.FULL, 同时面积也直接就是矩形mask的面积
+            if len(k_ranges) == 1:
+                attn_calc_remote_slice_local_list_this_stage.append(
+                    AttnSlice(
+                        q_range=q_range,
+                        k_range=k_ranges[0],  # type: ignore
+                        mask_type=AttnMaskType.FULL,
+                    )
+                )
+
+        # sanity check
+        if zeus.is_sanity_check_enable():
+            assert (
+                remote_k_ranges_global_this_stage.is_merged()
+            ), f"{remote_k_ranges_global_this_stage=} should be merged."
+
+        return RemoteRankEntry(
+            host_k_ranges_global=host_rank_entry_this_rank.host_k_ranges_global,
+            remote_k_ranges_global=remote_k_ranges_global_this_stage,
+            attn_calc_remote_slice_local_list=attn_calc_remote_slice_local_list_this_stage,
+        )
+
+    @nvtx.instrument_nvtx
+    def _init_transfer_table_per_stage(
+        self,
+        remote_rank_entry_per_rank_per_stage: list[list[RemoteRankEntry]],
+    ) -> list[TransferTable]:
+        """Initialize transfer table per stage for this rank"""
+
+        transfer_table_per_stage: list[TransferTable] = []
+        for stage, remote_rank_entry_per_rank_this_stage in enumerate(
+            remote_rank_entry_per_rank_per_stage
+        ):
+            transfer_table_per_stage.append(
+                self._init_transfer_table_for_one_stage(
+                    stage,
+                    remote_rank_entry_per_rank_this_stage,
+                )
+            )
+
+        return transfer_table_per_stage
 
     @nvtx.instrument_nvtx
     def _init_transfer_table_for_one_stage(
@@ -452,6 +1029,10 @@ class AttnSolver:
         stage: int,
         remote_rank_entry_per_rank_this_stage: list[RemoteRankEntry],
     ) -> TransferTable:
+        """Initialize transfer table for each overlap stage
+        called in 'self._init_transfer_table_per_stage'
+        """
+
         # init transfer info for this rank
         transfer_info_this_rank = self._init_transfer_info_this_rank(
             remote_rank_entry_per_rank_this_stage
@@ -546,6 +1127,10 @@ class AttnSolver:
         self,
         remote_rank_entry_per_rank_this_stage: list[RemoteRankEntry],
     ) -> TransferInfo:
+        """Initialize transfer info for current overlap stage for this rank,
+        called in 'self._init_transfer_table_for_one_stage'
+        """
+
         host_k_ranges_global_this_rank = remote_rank_entry_per_rank_this_stage[
             self.cp_rank
         ].host_k_ranges_global
@@ -572,13 +1157,16 @@ class AttnSolver:
             ].host_k_ranges_global
             k_ranges_global_recv_from_rank = (
                 remote_k_ranges_global_this_rank.find_overlap_ranges(
-                    rank_host_k_ranges_global
+                    rank_host_k_ranges_global,
+                    is_self_merged=True,
+                    is_other_merged=True,
                 )
             )
             # make the global k ranges local w.r.t. self's recv buffer
             k_ranges_local_recv_from_rank = (
                 remote_k_ranges_global_this_rank.make_ranges_local(
-                    k_ranges_global_recv_from_rank
+                    k_ranges_global_recv_from_rank,
+                    is_self_merged=True,
                 )
             )
             # add to recv transfer info for both global and local ones
@@ -606,13 +1194,16 @@ class AttnSolver:
             ].remote_k_ranges_global
             k_ranges_global_send_to_rank = (
                 host_k_ranges_global_this_rank.find_overlap_ranges(
-                    rank_remote_k_ranges_global
+                    rank_remote_k_ranges_global,
+                    is_self_merged=True,
+                    is_other_merged=True,
                 )
             )
             # make the global k ranges local w.r.t. self's send buffer
             k_ranges_local_send_to_rank = (
                 host_k_ranges_global_this_rank.make_ranges_local(
-                    k_ranges_global_send_to_rank
+                    k_ranges_global_send_to_rank,
+                    is_self_merged=True,
                 )
             )
             # add to send transfer info for both global and local ones
@@ -625,49 +1216,60 @@ class AttnSolver:
 
         return transfer_info_this_rank
 
+    @nvtx.instrument_nvtx
     def _init_transfer_info_per_rank(
         self,
         stage: int,
         transfer_info_this_rank: TransferInfo,
     ) -> list[TransferInfo]:
+        """Initialize transfer info for current overlap stage per rank,
+        called in 'self._init_transfer_table_for_one_stage'
+        """
+
         # all gather initial recv/send transfer info for each rank
         transfer_info_per_rank: list[TransferInfo] = [None] * self.cp_size  # type: ignore
-        dist.all_gather_object(
-            transfer_info_per_rank, transfer_info_this_rank, group=self.cp_group_nccl
-        )
+        with nvtx.add_nvtx_event("transfer_info_ag"):
+            dist.all_gather_object(
+                transfer_info_per_rank,
+                transfer_info_this_rank,
+                group=self.cp_group_nccl,
+            )
 
-        # sanity check:
-        # for each rank pair (i≠j): (send_ranki, recv_rankj)
-        #    whether the global k ranges that send_ranki needs to send to recv_rankj
-        #    are equal to the ones that recv_rankj needs to recv from send_ranki
-        for send_rank in range(self.cp_size):
-            for recv_rank in range(self.cp_size):
-                if send_rank == recv_rank:
-                    continue
+        # sanity check
+        if zeus.is_sanity_check_enable():
+            # for each rank pair (i≠j): (send_ranki, recv_rankj)
+            #    whether the global k ranges that send_ranki needs to send to recv_rankj
+            #    are equal to the ones that recv_rankj needs to recv from send_ranki
+            for send_rank in range(self.cp_size):
+                for recv_rank in range(self.cp_size):
+                    if send_rank == recv_rank:
+                        continue
 
-                send_info: TransferInfo = transfer_info_per_rank[send_rank]
-                recv_info: TransferInfo = transfer_info_per_rank[recv_rank]
-                k_ranges_global_recv_from_send_rank = (
-                    recv_info.k_ranges_global_recv_from_each_rank_list[send_rank]
-                )
-                k_ranges_global_send_to_recv_rank = (
-                    send_info.k_ranges_global_send_to_each_rank_list[recv_rank]
-                )
+                    send_info: TransferInfo = transfer_info_per_rank[send_rank]
+                    recv_info: TransferInfo = transfer_info_per_rank[recv_rank]
+                    k_ranges_global_recv_from_send_rank = (
+                        recv_info.k_ranges_global_recv_from_each_rank_list[send_rank]
+                    )
+                    k_ranges_global_send_to_recv_rank = (
+                        send_info.k_ranges_global_send_to_each_rank_list[recv_rank]
+                    )
 
-                assert (
-                    k_ranges_global_recv_from_send_rank
-                    == k_ranges_global_send_to_recv_rank
-                ), (
-                    f"The sanity check for transfer table at {stage=} failed:\n"
-                    f"For rank pair ({send_rank=} {recv_rank=}), we got:\n"
-                    f"{k_ranges_global_recv_from_send_rank=}\n"
-                    f"{k_ranges_global_send_to_recv_rank=}"
-                )
+                    assert (
+                        k_ranges_global_recv_from_send_rank
+                        == k_ranges_global_send_to_recv_rank
+                    ), (
+                        f"The sanity check for transfer table at {stage=} failed:\n"
+                        f"For rank pair ({send_rank=} {recv_rank=}), we got:\n"
+                        f"{k_ranges_global_recv_from_send_rank=}\n"
+                        f"{k_ranges_global_send_to_recv_rank=}"
+                    )
 
         return transfer_info_per_rank
 
     @nvtx.instrument_nvtx
     def calc_comm_meta(self) -> CommMeta:
+        """Calculate communication meta for kv group cast collective"""
+
         num_remote_tokens_list: list[int] = []
         group_cast_collective_args_list: list[GroupCastCollectiveArg] = []
 
@@ -677,11 +1279,11 @@ class AttnSolver:
         ):
             total_seqlen_host_k = remote_rank_entry_per_rank_this_stage[
                 self.cp_rank
-            ].host_k_ranges_global.seqlen
+            ].host_k_ranges_global.total_seqlen
 
             num_remote_tokens = remote_rank_entry_per_rank_this_stage[
                 self.cp_rank
-            ].remote_k_ranges_global.seqlen
+            ].remote_k_ranges_global.total_seqlen
 
             group_cast_collective_arg = self._calc_group_cast_collective_arg(
                 transfer_table_this_stage,
@@ -693,18 +1295,21 @@ class AttnSolver:
 
         # build comm meta
         comm_meta = CommMeta(
-            overlap_degree=self.overlap_degree,
             num_remote_tokens_per_overlap_stage=num_remote_tokens_list,
             group_cast_collective_args_list=group_cast_collective_args_list,
         )
 
         return comm_meta
 
+    @nvtx.instrument_nvtx
     def _calc_group_cast_collective_arg(
         self,
         transfer_table: TransferTable,
         total_seqlen_host_k: int,
     ) -> GroupCastCollectiveArg:
+        """Calculate group cast collective args from one transfer table
+        called in 'self.calc_comm_meta'
+        """
         # retrieve group cast ranges for local k ranges that this rank needs to send to
         group_cast_ranges_local_send_to = GroupCastRanges(
             self.cp_size,
@@ -732,7 +1337,7 @@ class AttnSolver:
                 input_split_size_list.append(r.start - last_end)
                 dst_indices_list.append([])
 
-            input_split_size_list.append(r.size)
+            input_split_size_list.append(r.seqlen)
             dst_indices_list.append(list(r.rank_set))  # type: ignore
             last_end = r.end
 
@@ -758,11 +1363,14 @@ class AttnSolver:
 
         for r in group_cast_ranges_local_recv_from.ranges_group:
             r: AttnRangeWithRank  # type: ignore
-            output_split_size_list.append(r.size)
-            # NOTE: as for group cast semantics,
-            # there's only one src rank that sends the corresponding data into
-            # each non-overlapped range in recv buffer
-            assert len(r.rank_set) == 1  # type: ignore
+            output_split_size_list.append(r.seqlen)
+
+            if zeus.is_sanity_check_enable():
+                # NOTE: as for group cast semantics,
+                # there's only one src rank that sends the corr. data into
+                # each non-overlapped range in recv buffer
+                assert len(r.rank_set) == 1  # type: ignore
+
             src_index_list.append(r.rank_set.pop())  # type: ignore
 
         # build group cast collective arg
@@ -777,57 +1385,77 @@ class AttnSolver:
 
     @nvtx.instrument_nvtx
     def calc_attn_calc_meta(self) -> AttnCalcMeta:
-        # check local attn calc
-        assert all(
-            slice is not None
-            for slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
+        """Calculate flex-flash-attention calculation meta"""
+
+        if zeus.is_sanity_check_enable():
+            # check local attn calc
+            assert all(
+                slice is not None
+                for slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
+            )
+
+            # check remote attn calc for each overlap stage
+            for (
+                remote_rank_entry_this_stage_this_rank
+            ) in self.remote_rank_entry_per_stage_this_rank:
+                assert all(
+                    slice is not None
+                    for slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
+                )
+
+        # ---   build local attn args   --- #
+
+        host_slice_local_list = (
+            self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
+        )
+        local_attn_arg = AttnArg(
+            q_ranges=[
+                slice.q_range.to_naive_range()  # type: ignore
+                for slice in host_slice_local_list
+            ],
+            k_ranges=[
+                slice.k_range.to_naive_range()  # type: ignore
+                for slice in host_slice_local_list
+            ],
+            is_causal_mapping=[
+                slice.mask_type == AttnMaskType.CAUSAL
+                for slice in host_slice_local_list
+            ],
+            total_area=sum(slice.area for slice in host_slice_local_list),
         )
 
-        # check remote attn calc for each overlap stage
+        # ---   build remote attn args for each overlap stage   --- #
+
+        remote_attn_args_list = []
         for (
             remote_rank_entry_this_stage_this_rank
         ) in self.remote_rank_entry_per_stage_this_rank:
-            assert all(
-                slice is not None
-                for slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
+            remote_slice_local_list = (
+                remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
             )
-
-        # build attn calc meta
-        attn_calc_meta = AttnCalcMeta(
-            overlap_degree=self.overlap_degree,
-            # build local attn args
-            local_attn_arg=AttnArg(
-                q_ranges=[
-                    slice.q_range.to_naive_range()  # type: ignore
-                    for slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
-                ],
-                k_ranges=[
-                    slice.k_range.to_naive_range()  # type: ignore
-                    for slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
-                ],
-                is_causal_mapping=[
-                    slice.mask_type == AttnMaskType.CAUSAL
-                    for slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
-                ],
-            ),
-            # build remote attn args for each overlap stage
-            remote_attn_args_list=[
+            remote_attn_args_list.append(
                 AttnArg(
                     q_ranges=[
                         slice.q_range.to_naive_range()  # type: ignore
-                        for slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
+                        for slice in remote_slice_local_list
                     ],
                     k_ranges=[
                         slice.k_range.to_naive_range()  # type: ignore
-                        for slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
+                        for slice in remote_slice_local_list
                     ],
                     is_causal_mapping=[
                         slice.mask_type == AttnMaskType.CAUSAL
-                        for slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
+                        for slice in remote_slice_local_list
                     ],
+                    total_area=sum(slice.area for slice in remote_slice_local_list),
                 )
-                for remote_rank_entry_this_stage_this_rank in self.remote_rank_entry_per_stage_this_rank
-            ],
+            )
+
+        # ---   build attn calc meta   --- #
+
+        attn_calc_meta = AttnCalcMeta(
+            local_attn_arg=local_attn_arg,
+            remote_attn_args_list=remote_attn_args_list,
         )
 
         return attn_calc_meta
@@ -857,6 +1485,9 @@ class AttnSolver:
             )
 
             repr_contents.append(repr_this_stage)
+
+        # 末尾换行
+        repr_contents.append("\n\n")
 
         return "\n\n".join(repr_contents)
 

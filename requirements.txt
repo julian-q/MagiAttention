@@ -1,2 +1,4 @@
 rich
 pre-commit
+coverage
+pytest-sugar

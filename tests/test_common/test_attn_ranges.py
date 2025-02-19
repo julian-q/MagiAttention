@@ -6,6 +6,7 @@ from zeus.common.ranges import AttnRange, AttnRanges, is_valid_cu_seqlens
 
 class TestAttnRanges(TestCase):
     def test_make_ranges_local(self):
+        # ---------    case1: w/o truncate     --------- #
         ranges = AttnRanges.from_ranges([(0, 10), (20, 30), (30, 35), (40, 50)])
         other_ranges = AttnRanges.from_ranges([(2, 8), (25, 32), (42, 45)])
         local_ranges = ranges.make_ranges_local(other_ranges)
@@ -22,11 +23,12 @@ class TestAttnRanges(TestCase):
         ):
             ranges.make_ranges_local(other_ranges)
 
-    def test_make_range_lcoal(self):
+    def test_make_range_local(self):
+        # ---------    case1: w/o truncate     --------- #
         ranges = AttnRanges.from_ranges([(0, 10), (20, 30), (30, 35), (40, 50)])
-        other_range = AttnRange(3, 9)
+        other_range = AttnRange(23, 32)
         local_range = ranges.make_range_local(other_range)
-        self.assertEqual(local_range, AttnRange(3, 9))
+        self.assertEqual(local_range, AttnRange(13, 22))
 
     def test_make_range_local_raises(self):
         ranges = AttnRanges.from_ranges([(0, 10), (20, 30), (30, 35), (40, 50)])
@@ -220,6 +222,234 @@ class TestAttnRanges(TestCase):
         merged_ranges = ranges.merge()
         self.assertEqual(merged_ranges, AttnRanges.from_ranges([(0, 35), (40, 50)]))
         self.assertTrue(merged_ranges.is_merged())
+
+    def test_chunk(self):
+        # ---------    case1: a single range     --------- #
+        attn_ranges = AttnRanges.from_ranges([(5, 10)])
+
+        # chunk with a large chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=8),
+            [attn_ranges],  # itself all in one chunk
+        )
+
+        # chunk with a medium chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=4),
+            [
+                AttnRanges.from_ranges([(5, 9)]),
+                AttnRanges.from_ranges([(9, 10)]),
+            ],  # split itself into two chunks
+        )
+
+        # chunk with a small chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=1),
+            [
+                AttnRanges.from_ranges([(5, 6)]),
+                AttnRanges.from_ranges([(6, 7)]),
+                AttnRanges.from_ranges([(7, 8)]),
+                AttnRanges.from_ranges([(8, 9)]),
+                AttnRanges.from_ranges([(9, 10)]),
+            ],  # split itself into several chunks
+        )
+
+        # ---------    case2: several small ranges     --------- #
+        attn_ranges = AttnRanges.from_ranges([(2, 4), (6, 9), (10, 12), (14, 17)])
+
+        # chunk with a xlarge chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=16),
+            [attn_ranges],  # itself all in one chunk
+        )
+
+        # chunk with a large chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=8),
+            [
+                AttnRanges.from_ranges([(2, 4), (6, 9), (10, 12), (14, 15)]),
+                AttnRanges.from_ranges([(15, 17)]),
+            ],
+        )
+
+        # chunk with a medium chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=4),
+            [
+                AttnRanges.from_ranges([(2, 4), (6, 8)]),
+                AttnRanges.from_ranges([(8, 9), (10, 12), (14, 15)]),
+                AttnRanges.from_ranges([(15, 17)]),
+            ],
+        )
+
+        # chunk with a small chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=2),
+            [
+                AttnRanges.from_ranges([(2, 4)]),
+                AttnRanges.from_ranges([(6, 8)]),
+                AttnRanges.from_ranges([(8, 9), (10, 11)]),
+                AttnRanges.from_ranges([(11, 12), (14, 15)]),
+                AttnRanges.from_ranges([(15, 17)]),
+            ],
+        )
+
+        # -----    case3: several small ranges + one long range   ------ #
+        attn_ranges = AttnRanges.from_ranges([(3, 6), (8, 9), (10, 12), (14, 21)])
+
+        # chunk with a xlarge chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=16),
+            [attn_ranges],  # itself all in one chunk
+        )
+
+        # chunk with a large chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=8),
+            [
+                AttnRanges.from_ranges([(3, 6), (8, 9), (10, 12), (14, 16)]),
+                AttnRanges.from_ranges([(16, 21)]),
+            ],
+        )
+
+        # chunk with a medium chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=4),
+            [
+                AttnRanges.from_ranges([(3, 6), (8, 9)]),
+                AttnRanges.from_ranges([(10, 12), (14, 16)]),
+                AttnRanges.from_ranges([(16, 20)]),
+                AttnRanges.from_ranges([(20, 21)]),
+            ],
+        )
+
+        # chunk with a small chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=2),
+            [
+                AttnRanges.from_ranges([(3, 5)]),
+                AttnRanges.from_ranges([(5, 6), (8, 9)]),
+                AttnRanges.from_ranges([(10, 12)]),
+                AttnRanges.from_ranges([(14, 16)]),
+                AttnRanges.from_ranges([(16, 18)]),
+                AttnRanges.from_ranges([(18, 20)]),
+                AttnRanges.from_ranges([(20, 21)]),
+            ],
+        )
+
+        # -----    case4: one long range + several small ranges   ------ #
+        attn_ranges = AttnRanges.from_ranges([(1, 2), (4, 12), (13, 15), (16, 19)])
+
+        # chunk with a xlarge chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=16),
+            [attn_ranges],  # itself all in one chunk
+        )
+
+        # chunk with a large chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=8),
+            [
+                AttnRanges.from_ranges([(1, 2), (4, 11)]),
+                AttnRanges.from_ranges([(11, 12), (13, 15), (16, 19)]),
+            ],
+        )
+
+        # chunk with a medium chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=4),
+            [
+                AttnRanges.from_ranges([(1, 2), (4, 7)]),
+                AttnRanges.from_ranges([(7, 11)]),
+                AttnRanges.from_ranges([(11, 12), (13, 15), (16, 17)]),
+                AttnRanges.from_ranges([(17, 19)]),
+            ],
+        )
+
+        # chunk with a small chunk size
+        self.assertEqual(
+            attn_ranges.chunk(chunk_size=2),
+            [
+                AttnRanges.from_ranges([(1, 2), (4, 5)]),
+                AttnRanges.from_ranges([(5, 7)]),
+                AttnRanges.from_ranges([(7, 9)]),
+                AttnRanges.from_ranges([(9, 11)]),
+                AttnRanges.from_ranges([(11, 12), (13, 14)]),
+                AttnRanges.from_ranges([(14, 15), (16, 17)]),
+                AttnRanges.from_ranges([(17, 19)]),
+            ],
+        )
+
+    def test_truncate(self):
+        attn_ranges = AttnRanges.from_ranges([(9, 15), (20, 30), (30, 35), (40, 50)])
+
+        # ---------    case1: w/o truncate     --------- #
+        trunc_start, trunc_end = None, None
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_ranges, attn_ranges)
+
+        # ---------    case2: with dummy truncate     --------- #
+        trunc_start, trunc_end = 0, 57
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_ranges, attn_ranges)
+
+        # ---------    case3: with left truncate     --------- #
+        trunc_start, trunc_end = 25, None
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(
+            trunc_ranges, AttnRanges.from_ranges([(25, 30), (30, 35), (40, 50)])
+        )
+
+        # ---------    case4: with right truncate     --------- #
+        trunc_start, trunc_end = None, 31
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(
+            trunc_ranges, AttnRanges.from_ranges([(9, 15), (20, 30), (30, 31)])
+        )
+
+        # ---------    case5: with left+right truncate     --------- #
+        trunc_start, trunc_end = 25, 31
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_ranges, AttnRanges.from_ranges([(25, 30), (30, 31)]))
+
+        # -----    case6: with left+right truncate but too left   ---- #
+        trunc_start, trunc_end = 0, 5
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertTrue(trunc_ranges.is_empty())
+
+        # -----    case7: with left+right truncate but too right   ---- #
+        trunc_start, trunc_end = 53, 64
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertTrue(trunc_ranges.is_empty())
+
+        # -----    case8: with left+right truncate but falling into a hole   ---- #
+        trunc_start, trunc_end = 36, 39
+        trunc_ranges = attn_ranges.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertTrue(trunc_ranges.is_empty())
 
     def test_is_valid_cu_seqlens(self):
         # NOTE: this test func also tests 'check_valid_cu_seqlens' implicitly

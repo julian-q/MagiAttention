@@ -97,7 +97,7 @@ class TestDispatcher(DistTestBase):
             is_k_permutable=is_k_permutable,
         )
 
-        assert len(buckets_per_rank) == cp_size
+        self.assertEqual(len(buckets_per_rank), cp_size)
 
         # --------------      dispatch to get host q, k       -------------- #
 
@@ -129,8 +129,8 @@ class TestDispatcher(DistTestBase):
 
         # --------------      check       -------------- #
 
-        assert torch.equal(global_q_und, global_q)
-        assert torch.equal(global_k_und, global_k)
+        self.assertTrue(torch.equal(global_q_und, global_q))
+        self.assertTrue(torch.equal(global_k_und, global_k))
 
     def test_seqlens2cu_seqlens(self):
         # ---------    multi-elem seqlens    --------- #

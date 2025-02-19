@@ -17,6 +17,8 @@ class AttnArg:
     k_ranges_tensor: torch.Tensor = None  # type: ignore
     is_causal_mapping_tensor: torch.Tensor = None  # type: ignore
 
+    total_area: int = 0
+
     def __post_init__(self):
         # shape check
         batch_size = len(self.q_ranges)
@@ -72,15 +74,15 @@ class AttnArg:
 
 @dataclass
 class AttnCalcMeta:
-    overlap_degree: int
     local_attn_arg: AttnArg
     remote_attn_args_list: list[AttnArg] = field(
         default_factory=list,
         metadata={"help": "remote attn args list for each overlap stage"},
     )
 
+    @property
+    def overlap_degree(self) -> int:
+        return len(self.remote_attn_args_list)
+
     def __post_init__(self):
-        assert self.overlap_degree == len(self.remote_attn_args_list), (
-            f"The {self.overlap_degree=}, but got inconsistent: "
-            f"{len(self.remote_attn_args_list)=}."
-        )
+        pass

@@ -1,4 +1,4 @@
-from typing import Any, Iterator, Optional, TypeAlias, Union
+from typing import Any, Iterator, Sequence, TypeAlias, Union
 
 import torch
 
@@ -6,7 +6,13 @@ from zeus.utils import nvtx
 
 from .range import AttnRange, NaiveRange, RangeError
 
-NaiveRanges: TypeAlias = list[NaiveRange]
+NaiveRanges: TypeAlias = Sequence[NaiveRange]
+
+__all__ = [
+    "is_valid_cu_seqlens",
+    "check_valid_cu_seqlens",
+    "AttnRanges",
+]
 
 
 def is_valid_cu_seqlens(cu_seqlens: list[int], seq_len: int) -> bool:
@@ -31,6 +37,32 @@ def check_valid_cu_seqlens(cu_seqlens: list[int], seq_len: int) -> None:
             f"The cu_seqlens {cu_seqlens} is invalid against the rule: 'cu_seqlens[0] == 0', \
             and 'cu_seqlens[i-1] < cu_seqlens[i], for any i in [1, len(cu_seqlens))'"  # noqa
         )
+
+
+def _calc_prefix_offset(merged_ranges: "AttnRanges") -> list[int]:
+    """NOTE: the ranges passed in should be merged already,
+    no check is applyed here
+    """
+    prefix_offset = [0]
+    for item in merged_ranges:
+        prefix_offset.append(prefix_offset[-1] + item.seqlen)
+    prefix_offset.pop()
+
+    return prefix_offset
+
+
+def _binary_search(
+    attn_ranges: Union[list[AttnRange], "AttnRanges"], target_range: AttnRange
+) -> int:
+    # left左侧都是小于等于target，right右侧都是大于target
+    left, right = 0, len(attn_ranges) - 1
+    while left <= right:
+        mid = (left + right) // 2
+        if attn_ranges[mid].start > target_range.start:
+            right = mid - 1
+        else:
+            left = mid + 1
+    return right
 
 
 class AttnRanges:
@@ -60,12 +92,23 @@ class AttnRanges:
     def __init__(self) -> None:
         self._ranges: list[AttnRange] = []
 
-    def is_valid_idx(self, idx: int) -> bool:
-        return 0 <= idx < self.size
+    def is_valid_idx(self, idx: int | slice) -> bool:
+        """Check if the input idx (or slice) is valid
+        NOTE:
+        1. when it is a slice, it can include negative index inside,
+        2. but when it is just a single index, it should NOT include negative index
+        for the safety sack of some in-place operations
+        """
+        if isinstance(idx, slice):
+            start, stop, step = idx.indices(len(self._ranges))
+            return 0 <= start < stop
+        return 0 <= idx < len(self._ranges)
 
-    def check_valid_idx(self, idx: int) -> None:
+    def check_valid_idx(self, idx: int | slice) -> None:
         if not self.is_valid_idx(idx):
-            raise IndexError(f"The index {idx} is out of the range [0, {self.size})")
+            raise IndexError(
+                f"The index / slice {idx} is out of the range [0, {len(self._ranges)})"
+            )
 
     def is_valid(
         self,
@@ -86,34 +129,31 @@ class AttnRanges:
                 f"Some of the {self._ranges=} is invalid against the rule: '0 <= start <= end'"
             )
 
-    # Inplace Operation(append, insert, pop, extend, sort, clear_empty)
-    def append(self, attn_range: AttnRange, check: bool = True) -> None:
+    # NOTE: Inplace Operation (append, insert, extend, pop)
+    def append(self, attn_range: AttnRange, check: bool = False) -> None:
         """Add the attn_range to the end"""
         if check:
             attn_range.check_valid()
-            self._ranges.append(attn_range)
-        else:
-            self._ranges.append(attn_range)
 
-    def insert(self, idx: int, attn_range: AttnRange, check: bool = True) -> None:
+        self._ranges.append(attn_range)
+
+    def insert(self, idx: int, attn_range: AttnRange, check: bool = False) -> None:
         """Insert the attn_range to the 'idx'-th position,
-        NOTE: if idx >= self.size, then use 'append' instead
+        NOTE: if idx >= len(self._ranges), then use 'append' instead
         """
         if check:
             self.check_valid_idx(idx)
             attn_range.check_valid()
-            self._ranges.insert(idx, attn_range)
-        else:
-            self._ranges.insert(idx, attn_range)
 
-    def extend(self, ranges: "AttnRanges", check: bool = True) -> None:
+        self._ranges.insert(idx, attn_range)
+
+    def extend(self, attn_ranges: "AttnRanges", check: bool = False) -> None:
         if check:
-            ranges.check_valid()
-            self._ranges.extend(ranges._ranges)
-        else:
-            self._ranges.extend(ranges._ranges)
+            attn_ranges.check_valid()
 
-    def pop(self, idx: int = -1) -> AttnRange:
+        self._ranges.extend(attn_ranges._ranges)
+
+    def pop(self, idx: int = -1, check: bool = False) -> AttnRange:
         """Remove and return item at index (default last).
 
         Args:
@@ -131,14 +171,18 @@ class AttnRanges:
         if idx < 0:
             idx = len(self._ranges) + idx
 
-        self.check_valid_idx(idx)
+        if check:
+            self.check_valid_idx(idx)
 
         return self._ranges.pop(idx)
 
-    def clear_empty(self) -> None:
-        self._ranges = [
-            attn_range for attn_range in self._ranges if not attn_range.is_empty()
-        ]
+    def clear_empty(self) -> "AttnRanges":
+        non_empty_ranges = AttnRanges()
+        for attn_range in self._ranges:
+            if not attn_range.is_empty():
+                non_empty_ranges.append(attn_range, check=False)
+
+        return non_empty_ranges
 
     @nvtx.instrument_nvtx
     def sort(self) -> "AttnRanges":
@@ -172,6 +216,49 @@ class AttnRanges:
                 _merged_ranges[-1].end = end
 
         return AttnRanges.from_ranges(_merged_ranges)
+
+    @nvtx.instrument_nvtx
+    def chunk(self, chunk_size: int) -> list["AttnRanges"]:
+        _ranges = self.merge()._ranges  # required to be merged first
+
+        chunked_ranges_list = []
+        chunked_ranges = AttnRanges()
+        cnt = 0
+        for attn_range in _ranges:
+            seqlen, start = attn_range.seqlen, attn_range.start
+            new_cnt = cnt + seqlen
+            while new_cnt >= chunk_size:
+                seqlen_truc = chunk_size - cnt
+                end = start + seqlen_truc
+                chunked_ranges.append(AttnRange(start=start, end=end))
+                chunked_ranges_list.append(chunked_ranges)
+
+                chunked_ranges = AttnRanges()
+                new_cnt -= chunk_size
+                start = end
+                cnt = 0
+            cnt = new_cnt
+
+            if cnt > 0:
+                chunked_ranges.append(AttnRange(start=start, end=attn_range.end))
+
+        if len(chunked_ranges) > 0:
+            chunked_ranges_list.append(chunked_ranges)
+
+        return chunked_ranges_list
+
+    def truncate(
+        self, start: int | None = None, end: int | None = None
+    ) -> "AttnRanges":
+        trunc_ranges = AttnRanges()
+        for attn_range in self._ranges:
+            trunc_range = attn_range.truncate(start, end)
+            if trunc_range.is_empty():
+                # NOTE: skip the empty range, i.e. those beyond the truncate range
+                continue
+            trunc_ranges.append(trunc_range, check=False)
+
+        return trunc_ranges
 
     def is_sorted(self) -> bool:
         if not all(
@@ -215,58 +302,43 @@ class AttnRanges:
     @nvtx.instrument_nvtx
     def make_range_local(
         self,
-        attn_range: AttnRange,
+        other_attn_range: AttnRange,
         is_self_merged: bool = False,
-        prefix_offset: Optional[list[int]] = None,
+        prefix_offset: list[int] | None = None,
     ) -> AttnRange:
         """
-        将attn_range映射到self的local_ranges中, 并返回attn_range在local_ranges中的位置
+        将other_attn_range映射到self_ranges对应的local_ranges中,
+        并返回other_attn_range在local_ranges中的位置 (允许通过可选的位置参数来截断)
 
         Args:
-            attn_range(AttnRange): 需要被转换的attn_range
+            other_attn_range(AttnRange): 需要被转换的other_attn_range
             is_self_merged(bool): 是否self已经merge
-            prefix_offset(Optional[list[int]]): 如果prefix_offset为None, 则计算prefix_offset
+            prefix_offset(list[int] | None): 如果prefix_offset为None, 则计算prefix_offset
 
         Returns:
-            local_range(AttnRange): attn_range在self的local_ranges中的位置
+            local_range(AttnRange): other_attn_range在self的local_ranges中的位置（如果有截断操作，可能返回一个空的range）
         """
 
-        def binary_search(arr: list[AttnRange], target: AttnRange) -> int:
-            # left左侧都是小于等于target，right右侧都是大于target
-            left, right = 0, len(arr) - 1
-            while left <= right:
-                mid = (left + right) // 2
-                if arr[mid].start > target.start:
-                    right = mid - 1
-                else:
-                    left = mid + 1
-            return right
-
-        if not is_self_merged:
-            merged_ranges = self.merge()
-        else:
-            merged_ranges = self
+        merged_ranges = self if is_self_merged else self.merge()
 
         if prefix_offset is None:
-            prefix_offset = [0]
-            for item in merged_ranges:
-                prefix_offset.append(prefix_offset[-1] + item.size)
-            prefix_offset.pop()
+            prefix_offset = _calc_prefix_offset(merged_ranges)
         else:
             assert len(prefix_offset) == len(merged_ranges)
 
-        le_idx = binary_search(merged_ranges, attn_range)
-        target_range = merged_ranges[le_idx]
+        le_idx = _binary_search(merged_ranges, other_attn_range)
+        target_range: AttnRange = merged_ranges[le_idx]
 
-        if attn_range.is_subrange_of(target_range):
-            start = prefix_offset[le_idx] + attn_range.start - target_range.start
-            local_range = AttnRange(start=start, end=start + attn_range.size)
+        if other_attn_range.is_subrange_of(target_range):
+            start = prefix_offset[le_idx] + other_attn_range.start - target_range.start
+            local_range = AttnRange(start=start, end=start + other_attn_range.seqlen)
             return local_range
         else:
             raise ValueError(
-                f"The attn_range {attn_range} is not in the (even merged) attn_ranges {merged_ranges}"
+                f"The attn_range {other_attn_range} is not in the (even merged) attn_ranges {merged_ranges}"
             )
 
+    @nvtx.instrument_nvtx
     def make_ranges_local(
         self,
         other_attn_ranges: "AttnRanges",
@@ -281,7 +353,7 @@ class AttnRanges:
             is_self_merged(bool): 是否self已经merge
 
         Returns:
-            local_ranges(AttnRanges): 每个attn_range在ref—local-ranges中的位置
+            local_ranges(AttnRanges): 每个attn_range在ref—local-ranges中的位置（如果有截断操作，则其中可能包含若干个空的range）
 
         Complexity:
             assume len(self) = m, len(other_attn_ranges) = n
@@ -289,27 +361,26 @@ class AttnRanges:
         """
         local_ranges = AttnRanges()
 
-        if not is_self_merged:
-            merged_ranges = self.merge()
-        else:
-            merged_ranges = self
+        merged_ranges = self if is_self_merged else self.merge()
 
-        prefix_offset = [0]
-        for item in merged_ranges:
-            prefix_offset.append(prefix_offset[-1] + item.size)
-        prefix_offset.pop()
+        prefix_offset = _calc_prefix_offset(merged_ranges)
 
         for attn_range in other_attn_ranges:
             local_range = merged_ranges.make_range_local(
-                attn_range, is_self_merged=True, prefix_offset=prefix_offset
+                attn_range,
+                is_self_merged=True,
+                prefix_offset=prefix_offset,
             )
             local_ranges.append(local_range)
 
         return local_ranges
 
+    @nvtx.instrument_nvtx
     def find_hole_ranges(
         self,
         other_attn_ranges: "AttnRanges",
+        is_self_merged: bool = False,
+        is_other_merged: bool = False,
     ) -> "AttnRanges":
         """
         返回self - other_attn_ranges的结果
@@ -328,8 +399,9 @@ class AttnRanges:
             other_attn_ranges = [[5, 10), [25, 30)]
             return [[0, 5), [15, 25)]
         """
-        ranges1 = self.merge()
-        ranges2 = other_attn_ranges.merge()
+
+        ranges1 = self if is_self_merged else self.merge()
+        ranges2 = other_attn_ranges if is_other_merged else other_attn_ranges.merge()
 
         p1 = 0
         p2 = 0
@@ -340,8 +412,8 @@ class AttnRanges:
             return AttnRange(start=r1.start, end=min(r1.end, r2.start))
 
         while p1 < len(ranges1) and p2 < len(ranges2):
-            r1 = ranges1[p1]
-            r2 = ranges2[p2]
+            r1: AttnRange = ranges1[p1]
+            r2: AttnRange = ranges2[p2]
 
             if r1.end > r2.end:
                 p2 += 1
@@ -365,9 +437,12 @@ class AttnRanges:
 
         return hole_ranges
 
+    @nvtx.instrument_nvtx
     def find_overlap_ranges(
         self: "AttnRanges",
         other_attn_ranges: "AttnRanges",
+        is_self_merged: bool = False,
+        is_other_merged: bool = False,
     ) -> "AttnRanges":
         """
         返回self和other_attn_ranges的交集
@@ -384,8 +459,9 @@ class AttnRanges:
             other_attn_ranges = [[5, 10), [18, 30)]
             return [[5, 10), [18, 30)]
         """
-        ranges1 = self.merge()
-        ranges2 = other_attn_ranges.merge()
+
+        ranges1 = self if is_self_merged else self.merge()
+        ranges2 = other_attn_ranges if is_other_merged else other_attn_ranges.merge()
 
         p1 = 0
         p2 = 0
@@ -440,10 +516,9 @@ class AttnRanges:
         return ranges
 
     @staticmethod
-    @nvtx.instrument_nvtx
     def from_ranges(
-        ranges: Union[NaiveRanges, "AttnRanges"],
-        check: bool = True,
+        ranges: Union[NaiveRanges, list[AttnRange], "AttnRanges"],
+        check: bool = False,
     ) -> "AttnRanges":
         if isinstance(ranges, AttnRanges):  # just copy
             attn_ranges = ranges
@@ -473,18 +548,22 @@ class AttnRanges:
         self._ranges[-1] = attn_range
 
     @property
-    def size(self) -> int:
-        return len(self._ranges)
-
-    @property
-    def seqlen(self) -> int:
-        return sum(attn_range.size for attn_range in self._ranges)
+    def total_seqlen(self) -> int:
+        """The total seqlen this ranges represent
+        which is equal to the sum of the size of each range
+        NOTE: distinguish with the property 'self.max_seqlen'
+        """
+        return sum(attn_range.seqlen for attn_range in self._ranges)
 
     @property
     def max_seqlen(self) -> int:
+        """The maximum seqlen this ranges represent
+        which is equal to the maximum size of each range
+        NOTE: distinguish with the property 'self.total_seqlen'
+        """
         if self.is_empty():
             return 0
-        return max(attn_range.size for attn_range in self._ranges)
+        return max(attn_range.seqlen for attn_range in self._ranges)
 
     @property
     def start(self) -> int:
@@ -499,25 +578,36 @@ class AttnRanges:
         return max(attn_range.end for attn_range in self._ranges)
 
     def is_empty(self) -> bool:
-        return self.size == 0
+        return len(self._ranges) == 0
 
     def __len__(self) -> int:
-        return self.size
+        return len(self._ranges)
 
-    def __getitem__(self, idx: int) -> AttnRange:
+    def __getitem__(self, idx: int | slice):
         self.check_valid_idx(idx)
+        if isinstance(idx, slice):
+            sub_attn_ranges = AttnRanges()
+            for attn_range in self._ranges[idx]:
+                sub_attn_ranges.append(attn_range, check=False)
+            return sub_attn_ranges
+
         return self._ranges[idx]
 
     def __iter__(self) -> Iterator[AttnRange]:
         return iter(self._ranges)
 
-    def __repr__(self) -> str:
-        return f"{self._ranges}"
-
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, AttnRanges):
             return self._ranges == other._ranges
         return False
+
+    def __hash__(self) -> int:
+        return hash(tuple(self._ranges))
+
+    def __repr__(self) -> str:
+        if self.is_empty():  # to prevent repr as "[]" to mix up with empty list
+            return "[[,)]"
+        return f"{self._ranges}"
 
 
 RangesType: TypeAlias = AttnRanges | NaiveRanges

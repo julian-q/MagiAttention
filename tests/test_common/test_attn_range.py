@@ -5,13 +5,13 @@ from zeus.common.ranges import AttnRange, RangeError
 
 
 class TestAttnRange(TestCase):
-    def test_range_simple_properties(self):
+    def test_simple_properties(self):
         # ---------    init an attn range     --------- #
 
         attn_range = AttnRange(0, 10)
         self.assertEqual(attn_range.start, 0)
         self.assertEqual(attn_range.end, 10)
-        self.assertEqual(attn_range.size, 10)
+        self.assertEqual(attn_range.seqlen, 10)
         self.assertEqual(attn_range.seqlen, 10)
         self.assertEqual(len(attn_range), 10)
         self.assertFalse(attn_range.is_empty())
@@ -33,7 +33,7 @@ class TestAttnRange(TestCase):
         attn_range.start = 4
         self.assertEqual(attn_range.start, 4)
         self.assertEqual(attn_range.end, 10)
-        self.assertEqual(attn_range.size, 6)
+        self.assertEqual(attn_range.seqlen, 6)
         self.assertEqual(attn_range.seqlen, 6)
         self.assertEqual(len(attn_range), 6)
 
@@ -48,7 +48,7 @@ class TestAttnRange(TestCase):
         attn_range.end = 12
         self.assertEqual(attn_range.start, 4)
         self.assertEqual(attn_range.end, 12)
-        self.assertEqual(attn_range.size, 8)
+        self.assertEqual(attn_range.seqlen, 8)
         self.assertEqual(attn_range.seqlen, 8)
         self.assertEqual(len(attn_range), 8)
 
@@ -58,7 +58,7 @@ class TestAttnRange(TestCase):
         attn_range.end = 5
         self.assertEqual(attn_range.start, 5)
         self.assertEqual(attn_range.end, 5)
-        self.assertEqual(attn_range.size, 0)
+        self.assertEqual(attn_range.seqlen, 0)
         self.assertEqual(attn_range.seqlen, 0)
         self.assertEqual(len(attn_range), 0)
         self.assertTrue(attn_range.is_empty())
@@ -69,7 +69,7 @@ class TestAttnRange(TestCase):
             AttributeError,
             msg="The 'size' property is read-only",
         ):
-            attn_range.size = 3
+            attn_range.seqlen = 3
 
         with self.assertRaises(
             AttributeError,
@@ -99,7 +99,7 @@ class TestAttnRange(TestCase):
         )  # another contructor, from naive range
         self.assertEqual(attn_range, attn_range4_from_naive)
 
-    def test_range_set_ops(self):
+    def test_set_ops(self):
         # ---------    init several attn ranges     --------- #
 
         # the attn ranges below can be mapped into the axis as below:
@@ -152,6 +152,65 @@ class TestAttnRange(TestCase):
         attn_diff_ranges_51 = attn_range5.diff_by(attn_range1)
         self.assertEqual(len(attn_diff_ranges_51), 1)
         self.assertEqual(attn_diff_ranges_51[0], AttnRange(2, 8))
+
+    def test_truncate(self):
+        attn_range = AttnRange(9, 15)
+
+        # ---------    case1: w/o truncate     --------- #
+        trunc_start, trunc_end = None, None
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_range, attn_range)
+
+        # ---------    case2: with dummy truncate     --------- #
+        trunc_start, trunc_end = 0, 20
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_range, attn_range)
+
+        # ---------    case3: with left truncate     --------- #
+        trunc_start, trunc_end = 11, None
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_range, AttnRange(11, 15))
+
+        # ---------    case4: with right truncate     --------- #
+        trunc_start, trunc_end = None, 13
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_range, AttnRange(9, 13))
+
+        # ---------    case5: with left+right truncate     --------- #
+        trunc_start, trunc_end = 11, 13
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertEqual(trunc_range, AttnRange(11, 13))
+
+        # -----    case6: with left+right truncate but too left   ---- #
+        trunc_start, trunc_end = 1, 7
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertTrue(trunc_range.is_empty())
+
+        # -----    case7: with left+right truncate but too right   ---- #
+        trunc_start, trunc_end = 17, 23
+        trunc_range = attn_range.truncate(
+            start=trunc_start,
+            end=trunc_end,
+        )
+        self.assertTrue(trunc_range.is_empty())
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 from typing import Any, TypeAlias, Union
 
-NaiveRange: TypeAlias = tuple[int, int]
+NaiveRange: TypeAlias = tuple[int, int] | list[int]  # type: ignore[misc]
 
 
 class RangeError(Exception):
@@ -35,20 +35,18 @@ class AttnRange:
         self._end = value
 
     @property
-    def size(self) -> int:
-        return self._end - self._start
-
-    @property
     def seqlen(self) -> int:
-        return self.size
+        """The length of this range in the axis"""
+
+        return self._end - self._start
 
     def to_naive_range(self) -> NaiveRange:
         return (self._start, self._end)
 
     @staticmethod
     def from_range(
-        attn_range: Union[NaiveRange, "AttnRange"],
-        check: bool = True,
+        attn_range: Union[NaiveRange, list[int], "AttnRange"],
+        check: bool = False,
     ) -> "AttnRange":
         if isinstance(attn_range, AttnRange):  # just copy
             res = attn_range
@@ -62,6 +60,13 @@ class AttnRange:
 
     def offset(self, offset: int) -> "AttnRange":
         return AttnRange(start=self._start + offset, end=self._end + offset)
+
+    def truncate(self, start: int | None = None, end: int | None = None) -> "AttnRange":
+        start = self._start if start is None else max(self._start, start)
+        end = self._end if end is None else min(self._end, end)
+
+        # NOTE: if start > end, then return empty range: [start, start)
+        return AttnRange(start=start, end=max(start, end))
 
     def intersect(self, other: "AttnRange") -> "AttnRange":
         start = max(self._start, other._start)
@@ -113,12 +118,15 @@ class AttnRange:
             )
 
     def __len__(self) -> int:
-        return self.size
+        return self.seqlen
 
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, AttnRange):
             return self._start == other._start and self._end == other._end
         return False
+
+    def __hash__(self) -> int:
+        return hash((self._start, self._end))
 
     def __repr__(self) -> str:
         return f"[{self._start}, {self._end})"

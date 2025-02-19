@@ -1,17 +1,9 @@
 import heapq
-from enum import Enum
 
 import numpy as np
 import torch.nn as nn
 
-
-class DispatchAlgorithm(Enum):
-    """This enum is used to specify the algorithm for balanced dispatching"""
-
-    LOWER_BOUND = "lower_bound"
-    DYNAMIC_PROGRAMMING = "dynamic_programming"
-    BINARY_SEARCH = "binary_search"
-    MIN_HEAP = "min_heap"
+from zeus.common.enum import DispatchAlgorithm
 
 
 class DispatchSolver(nn.Module):

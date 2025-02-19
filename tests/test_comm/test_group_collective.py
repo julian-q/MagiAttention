@@ -44,7 +44,7 @@ class TestMultiCastCollective(DistTestBase):
         # src_index_list:
         # r0, r1, r2, r3: [0, 1, 2, 3]
 
-        work, post_process_fn = group_cast_collective(
+        work = group_cast_collective(
             input=input_tensor,
             output=output_tensor,
             input_split_size_list=input_split_size_list,
@@ -54,16 +54,14 @@ class TestMultiCastCollective(DistTestBase):
             group=self.process_group,
             async_op=True,
         )
-
-        work.wait()
-        output_tensor = post_process_fn(output_tensor)
+        output_tensor = work.wait_post_process(output_tensor)
 
         expected_output = torch.tensor(
             [i for i in range(self.world_size)], dtype=dtype, device=device
         )
         # expected_output:
         # r0, r1, r2, r3: [0, 1, 2, 3]
-        assert torch.equal(output_tensor, expected_output)
+        self.assertTrue(torch.equal(output_tensor, expected_output))
 
     @skip_if_lt_x_gpu(4)
     @with_comms
@@ -101,7 +99,7 @@ class TestMultiCastCollective(DistTestBase):
         # dst_index_list:
         # r0, r1, r2, r3: [0, 1, 2, 3]
 
-        work, post_process_fn = group_reduce_collective(
+        work = group_reduce_collective(
             input=input_tensor,
             output=output_tensor,
             input_split_size_list=input_split_size_list,
@@ -111,11 +109,9 @@ class TestMultiCastCollective(DistTestBase):
             group=self.process_group,
             async_op=True,
         )
+        output_tensor = work.wait_post_process(output_tensor)
 
-        work.wait()
-        output_tensor = post_process_fn(output_tensor)
-
-        assert torch.equal(output_tensor, expected_tensor_per_rank[self.rank])
+        self.assertTrue(torch.equal(output_tensor, expected_tensor_per_rank[self.rank]))
 
     @skip_if_lt_x_gpu(4)
     @with_comms
@@ -168,7 +164,7 @@ class TestMultiCastCollective(DistTestBase):
 
         expected_tensor = expected_tensor_per_rank[self.rank]
 
-        work, post_process_fn = group_cast_collective(
+        work = group_cast_collective(
             input=input_tensor,
             output=output_tensor,
             input_split_size_list=input_split_size_list,
@@ -178,9 +174,9 @@ class TestMultiCastCollective(DistTestBase):
             group=self.process_group,
             async_op=True,
         )
-        work.wait()
-        output_tensor = post_process_fn(output_tensor)
-        assert torch.equal(output_tensor, expected_tensor)
+        output_tensor = work.wait_post_process(output_tensor)
+
+        self.assertTrue(torch.equal(output_tensor, expected_tensor))
 
     def test_trans_with_dim0(self):
         # ---------    high-dim tensor     --------- #

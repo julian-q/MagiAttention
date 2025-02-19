@@ -181,11 +181,15 @@ class TestCommonUtils(TestCase):
         )
 
     def test_is_list_value_all(self):
-        # ---------    empty list always False     --------- #
+        # ----    empty list always False unless allow empty, then always True   ---- #
 
         self.assertFalse(is_list_value_all([], val=1))
         self.assertFalse(is_list_value_all([], just_same=True))
         self.assertFalse(is_list_value_all([], val=1, just_same=True))
+
+        self.assertTrue(is_list_value_all([], val=1, allow_empty=True))
+        self.assertTrue(is_list_value_all([], just_same=True, allow_empty=True))
+        self.assertTrue(is_list_value_all([], val=1, just_same=True, allow_empty=True))
 
         # ----  error when val is given and just_same is True  ---- #
 
@@ -211,11 +215,15 @@ class TestCommonUtils(TestCase):
         self.assertFalse(is_list_value_all([2, 3, 4, 5], just_same=True))
 
     def test_is_list_type_all(self):
-        # ---------    empty list always False     --------- #
+        # ----    empty list always False unless allow empty, then always True   ---- #
 
         self.assertFalse(is_list_type_all([], _type=1))
         self.assertFalse(is_list_type_all([], just_same=True))
         self.assertFalse(is_list_type_all([], _type=1, just_same=True))
+
+        self.assertTrue(is_list_type_all([], _type=1, allow_empty=True))
+        self.assertTrue(is_list_type_all([], just_same=True, allow_empty=True))
+        self.assertTrue(is_list_type_all([], _type=1, just_same=True, allow_empty=True))
 
         # ----  error when _type is given and just_same is True  ---- #
 

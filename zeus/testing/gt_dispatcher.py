@@ -2,12 +2,11 @@ from typing import List
 
 import torch.nn as nn
 
-from zeus.common.enum import AttnMaskType
+from zeus.common.enum import AttnMaskType, DispatchAlgorithm
 from zeus.common.mask import AttnMask
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
 from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
-from zeus.meta.solver.dispatch_solver import DispatchAlgorithm
 
 
 class GroundTruthDispatcher(nn.Module):
@@ -93,11 +92,14 @@ class GroundTruthDispatcher(nn.Module):
                     q_range=q_range.offset(chunk_start),
                     k_range=k_range,
                     mask_type=mask_type,
-                    area=chunk_mask.calc_sub_area(
-                        q_range=q_range,
-                        k_range=k_range,
-                    ),
                 )
+
+                # HACK: 后面会将计算面积的逻辑封装在AttnSlice中并且area只读, 这里保留直接设置area的功能
+                slice.area = chunk_mask.calc_sub_area(
+                    q_range=q_range,
+                    k_range=k_range,
+                )
+
                 chunk.q_slices.append(slice)
 
             global_bucket.q_chunks.append(chunk)
