@@ -19,6 +19,7 @@ if torch.cuda.is_available() and torch.cuda.device_count() > 1:
     NUM_DEVICES = min(NUM_DEVICES, torch.cuda.device_count())
 
 
+# TODO: add process group initialization and property
 class DistTestBase(MultiProcessTestCase):
     @property
     def seed(self) -> int:

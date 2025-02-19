@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 
@@ -75,10 +75,7 @@ class AttnArg:
 @dataclass
 class AttnCalcMeta:
     local_attn_arg: AttnArg
-    remote_attn_args_list: list[AttnArg] = field(
-        default_factory=list,
-        metadata={"help": "remote attn args list for each overlap stage"},
-    )
+    remote_attn_args_list: list[AttnArg]
 
     @property
     def overlap_degree(self) -> int:

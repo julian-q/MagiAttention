@@ -102,6 +102,9 @@ class AttnRange:
     def is_subrange_of(self, other: "AttnRange") -> bool:
         return self._start >= other._start and self._end <= other._end
 
+    def is_overlap_with(self, other: "AttnRange") -> bool:
+        return not (self._start >= other._end or self._end <= other._start)
+
     def is_empty(self) -> bool:
         return self._start == self._end
 

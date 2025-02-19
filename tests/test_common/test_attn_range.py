@@ -127,6 +127,8 @@ class TestAttnRange(TestCase):
         self.assertTrue(attn_range1.intersect(attn_range4).is_empty())
         self.assertEqual(attn_range1.intersect(attn_range5), AttnRange(8, 9))
         self.assertEqual(attn_range4.intersect(attn_range5), AttnRange(10, 12))
+        self.assertTrue(attn_range4.is_overlap_with(attn_range5))
+        self.assertFalse(attn_range2.is_overlap_with(attn_range5))
 
         # ---------    test diff by     --------- #
 

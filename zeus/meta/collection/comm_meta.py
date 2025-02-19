@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -11,13 +11,8 @@ class GroupCastCollectiveArg:
 
 @dataclass
 class CommMeta:
-    num_remote_tokens_per_overlap_stage: list[int] = field(
-        default_factory=list, metadata={"help": "num tokens per overlap stage"}
-    )
-    group_cast_collective_args_list: list[GroupCastCollectiveArg] = field(
-        default_factory=list,
-        metadata={"help": "group cast collective args list for each overlap stage"},
-    )
+    num_remote_tokens_per_overlap_stage: list[int]
+    group_cast_collective_args_list: list[GroupCastCollectiveArg]
 
     @property
     def overlap_degree(self) -> int:

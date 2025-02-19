@@ -92,24 +92,6 @@ class AttnRanges:
     def __init__(self) -> None:
         self._ranges: list[AttnRange] = []
 
-    def is_valid_idx(self, idx: int | slice) -> bool:
-        """Check if the input idx (or slice) is valid
-        NOTE:
-        1. when it is a slice, it can include negative index inside,
-        2. but when it is just a single index, it should NOT include negative index
-        for the safety sack of some in-place operations
-        """
-        if isinstance(idx, slice):
-            start, stop, step = idx.indices(len(self._ranges))
-            return 0 <= start < stop
-        return 0 <= idx < len(self._ranges)
-
-    def check_valid_idx(self, idx: int | slice) -> None:
-        if not self.is_valid_idx(idx):
-            raise IndexError(
-                f"The index / slice {idx} is out of the range [0, {len(self._ranges)})"
-            )
-
     def is_valid(
         self,
     ) -> bool:
@@ -142,7 +124,6 @@ class AttnRanges:
         NOTE: if idx >= len(self._ranges), then use 'append' instead
         """
         if check:
-            self.check_valid_idx(idx)
             attn_range.check_valid()
 
         self._ranges.insert(idx, attn_range)
@@ -153,7 +134,7 @@ class AttnRanges:
 
         self._ranges.extend(attn_ranges._ranges)
 
-    def pop(self, idx: int = -1, check: bool = False) -> AttnRange:
+    def pop(self, idx: int = -1) -> AttnRange:
         """Remove and return item at index (default last).
 
         Args:
@@ -168,19 +149,13 @@ class AttnRanges:
         if self.is_empty():
             raise IndexError("pop from empty AttnRanges")
 
-        if idx < 0:
-            idx = len(self._ranges) + idx
-
-        if check:
-            self.check_valid_idx(idx)
-
         return self._ranges.pop(idx)
 
     def clear_empty(self) -> "AttnRanges":
         non_empty_ranges = AttnRanges()
         for attn_range in self._ranges:
             if not attn_range.is_empty():
-                non_empty_ranges.append(attn_range, check=False)
+                non_empty_ranges.append(attn_range)
 
         return non_empty_ranges
 
@@ -197,9 +172,13 @@ class AttnRanges:
 
     @nvtx.instrument_nvtx
     def merge(self) -> "AttnRanges":
-        _ranges = self.sort()._ranges
+        """Merge the attn_ranges for the overlapped parts
+        in ascending order by 'attn_range.start'
+        """
 
-        _merged_ranges: list[AttnRange] = []
+        _ranges = self.sort()._ranges  # required to be sorted first
+
+        _merged_ranges = AttnRanges()
 
         start, end = None, None
         for attn_range in _ranges:
@@ -215,7 +194,7 @@ class AttnRanges:
                 end = attn_range.end
                 _merged_ranges[-1].end = end
 
-        return AttnRanges.from_ranges(_merged_ranges)
+        return _merged_ranges
 
     @nvtx.instrument_nvtx
     def chunk(self, chunk_size: int) -> list["AttnRanges"]:
@@ -248,7 +227,9 @@ class AttnRanges:
         return chunked_ranges_list
 
     def truncate(
-        self, start: int | None = None, end: int | None = None
+        self,
+        start: int | None = None,
+        end: int | None = None,
     ) -> "AttnRanges":
         trunc_ranges = AttnRanges()
         for attn_range in self._ranges:
@@ -256,7 +237,7 @@ class AttnRanges:
             if trunc_range.is_empty():
                 # NOTE: skip the empty range, i.e. those beyond the truncate range
                 continue
-            trunc_ranges.append(trunc_range, check=False)
+            trunc_ranges.append(trunc_range)
 
         return trunc_ranges
 
@@ -429,11 +410,7 @@ class AttnRanges:
                 except RangeError:
                     pass
 
-        while p1 < len(ranges1):
-            hole_ranges.append(ranges1[p1])
-            p1 += 1
-
-        hole_ranges = hole_ranges.merge()
+        hole_ranges.extend(ranges1[p1:])
 
         return hole_ranges
 
@@ -451,7 +428,7 @@ class AttnRanges:
             other_attn_ranges(AttnRanges): 需要被求交集的range
 
         Returns:
-            NOTE: overlap_ranges is merged
+            NOTE: overlap_ranges is guaranteed to be merged
             overlap_ranges(AttnRanges): self和other_attn_ranges的交集
 
         Example::
@@ -466,30 +443,19 @@ class AttnRanges:
         p1 = 0
         p2 = 0
 
-        overlap_range_list = []
-
-        def is_overlap(r1: AttnRange, r2: AttnRange) -> bool:
-            return (r1.start < r2.end and r1.end > r2.start) or (
-                r2.start < r1.end and r2.end > r1.start
-            )
-
-        def get_overlap_range(r1: AttnRange, r2: AttnRange) -> AttnRange:
-            return AttnRange(start=max(r1.start, r2.start), end=min(r1.end, r2.end))
+        overlap_ranges = AttnRanges()
 
         while p1 < len(ranges1) and p2 < len(ranges2):
-            r1 = ranges1[p1]
-            r2 = ranges2[p2]
+            r1: AttnRange = ranges1[p1]
+            r2: AttnRange = ranges2[p2]
 
             if r1.end > r2.end:
                 p2 += 1
             else:
                 p1 += 1
 
-            if is_overlap(r1, r2):
-                overlap_range_list.append(get_overlap_range(r1, r2))
-
-        overlap_ranges = AttnRanges.from_ranges(overlap_range_list)
-        overlap_ranges = overlap_ranges.merge()
+            if r1.is_overlap_with(r2):
+                overlap_ranges.append(r1.intersect(r2))
 
         return overlap_ranges
 
@@ -511,7 +477,7 @@ class AttnRanges:
         ranges = AttnRanges()
 
         for i in range(1, len(cu_seqlens)):
-            ranges.append(AttnRange(cu_seqlens[i - 1], cu_seqlens[i]), check=False)
+            ranges.append(AttnRange(cu_seqlens[i - 1], cu_seqlens[i]))
 
         return ranges
 
@@ -524,9 +490,7 @@ class AttnRanges:
             attn_ranges = ranges
         else:
             attn_ranges = AttnRanges()
-            _ranges = [
-                AttnRange.from_range(attn_range, check=False) for attn_range in ranges
-            ]
+            _ranges = [AttnRange.from_range(attn_range) for attn_range in ranges]
             attn_ranges._ranges = _ranges
 
         if check:
@@ -536,16 +500,6 @@ class AttnRanges:
 
     def to_naive_ranges(self) -> NaiveRanges:
         return [attn_range.to_naive_range() for attn_range in self._ranges]
-
-    @property
-    def last(self) -> AttnRange:
-        if self.is_empty():
-            raise ValueError("The ranges is empty, there is no last attn_range")
-        return self._ranges[-1]
-
-    @last.setter
-    def last(self, attn_range: AttnRange) -> None:
-        self._ranges[-1] = attn_range
 
     @property
     def total_seqlen(self) -> int:
@@ -577,6 +531,19 @@ class AttnRanges:
             raise ValueError("The ranges is empty, there is no end")
         return max(attn_range.end for attn_range in self._ranges)
 
+    @property
+    def points(self) -> list[int]:
+        """The axis points covered by this ranges
+        in ascending order and without duplicates
+        """
+
+        _points = set()
+        for r in self._ranges:
+            _points.add(r.start)
+            _points.add(r.end)
+
+        return sorted(list(_points))
+
     def is_empty(self) -> bool:
         return len(self._ranges) == 0
 
@@ -584,14 +551,21 @@ class AttnRanges:
         return len(self._ranges)
 
     def __getitem__(self, idx: int | slice):
-        self.check_valid_idx(idx)
         if isinstance(idx, slice):
             sub_attn_ranges = AttnRanges()
             for attn_range in self._ranges[idx]:
-                sub_attn_ranges.append(attn_range, check=False)
+                sub_attn_ranges.append(attn_range)
             return sub_attn_ranges
 
         return self._ranges[idx]
+
+    def __setitem__(self, idx: int | slice, value: Union[AttnRange, "AttnRanges"]):
+        if isinstance(idx, slice):
+            assert isinstance(value, AttnRanges) and idx.stop - idx.start == len(value)
+            self._ranges[idx] = value._ranges
+        else:
+            assert isinstance(value, AttnRange)
+            self._ranges[idx] = value
 
     def __iter__(self) -> Iterator[AttnRange]:
         return iter(self._ranges)

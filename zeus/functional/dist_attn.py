@@ -11,7 +11,7 @@ from zeus.comm.primitive import group_cast_collective, group_reduce_collective
 from zeus.comm.work import WorkWithPostProcessFn
 from zeus.common.config import DistFlashAttnConfig
 from zeus.meta.collection import AttnCalcMeta, CommMeta
-from zeus.utils import nvtx
+from zeus.utils import deprecated, nvtx
 
 logger = getLogger("zeus")
 
@@ -42,11 +42,16 @@ class DistFlashAttnRuntime:
         self,
         comm_meta: CommMeta,
         calc_meta: AttnCalcMeta,
-        cp_group_nccl: dist.ProcessGroup,
+        cp_group_kv: dist.ProcessGroup,
+        cp_group_dkv: dist.ProcessGroup,
     ):
+        assert dist.get_backend(cp_group_kv) == dist.Backend.NCCL
+        assert dist.get_backend(cp_group_dkv) == dist.Backend.NCCL
+
         self.comm_meta = comm_meta
         self.calc_meta = calc_meta
-        self.cp_group_nccl = cp_group_nccl
+        self.cp_group_kv = cp_group_kv
+        self.cp_group_dkv = cp_group_dkv
 
         # NOTE: get the real overlap degree from comm meta
         # instead of the initial one from overlap config
@@ -107,7 +112,7 @@ class DistFlashAttnRuntime:
             * 2,
             dst_indices_list=group_cast_collective_args.dst_indices_list * 2,
             src_index_list=group_cast_collective_args.src_index_list * 2,
-            group=self.cp_group_nccl,
+            group=self.cp_group_kv,
             async_op=True,
         )
 
@@ -308,7 +313,7 @@ class DistFlashAttnRuntime:
             output_split_size_list=group_cast_collective_args.input_split_size_list * 2,
             dst_index_list=group_cast_collective_args.src_index_list * 2,
             src_indices_list=group_cast_collective_args.dst_indices_list * 2,
-            group=self.cp_group_nccl,
+            group=self.cp_group_dkv,
             async_op=True,
         )
 
@@ -427,13 +432,19 @@ class DistFlashAttnRuntime:
         return o.to(o1.dtype)
 
     @classmethod
+    @deprecated
     def from_attn_meta(
         cls,
         comm_meta: CommMeta,
         calc_meta: AttnCalcMeta,
         cp_group_nccl: dist.ProcessGroup,
-    ):
-        return cls(comm_meta, calc_meta, cp_group_nccl)
+    ) -> "DistFlashAttnRuntime":
+        return cls(
+            comm_meta=comm_meta,
+            calc_meta=calc_meta,
+            cp_group_kv=cp_group_nccl,
+            cp_group_dkv=cp_group_nccl,
+        )
 
 
 class DistFlashAttnFunc(torch.autograd.Function):

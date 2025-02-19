@@ -82,9 +82,30 @@ INTER_NODE_COMM_COST_FACTOR = (
 
 
 class TestPipeline(DistTestBase):
+    def init_pg(self) -> None:
+        super().init_pg()
+
+        # init several pgs with all ranks
+        self.nccl_groups = [
+            dist.new_group(list(range(self.world_size)), backend="nccl")
+            for _ in range(2)
+        ]
+        self.gloo_groups = [
+            dist.new_group(list(range(self.world_size)), backend="gloo")
+            for _ in range(1)
+        ]
+
     @property
     def process_group(self):
         return dist.distributed_c10d._get_default_group()
+
+    @property
+    def nccl_group(self) -> dist.ProcessGroup:
+        return self.nccl_groups[0]
+
+    @property
+    def gloo_group(self) -> dist.ProcessGroup:
+        return self.gloo_groups[0]
 
     @property
     def world_size(self) -> int:
@@ -250,10 +271,10 @@ class TestPipeline(DistTestBase):
             #     "chunk_size": 1024,
             # },
             # NOTE: profile only case
-            # varlen block causal with total seqlen 140k
+            # varlen block causal with total seqlen 144k
             {
                 PROFILE_ONLY: True,
-                NAME: "varlen_block_causal_140k",
+                NAME: "varlen_block_causal_144k",
                 "q_ranges": AttnRanges.from_ranges(
                     [
                         [0, 20480],
@@ -262,7 +283,7 @@ class TestPipeline(DistTestBase):
                         [61440, 81920],
                         [81920, 102400],
                         [102400, 122880],
-                        [122880, 143360],
+                        [122880, 147456],
                     ]
                 ),
                 "k_ranges": AttnRanges.from_ranges(
@@ -273,13 +294,13 @@ class TestPipeline(DistTestBase):
                         [0, 81920],
                         [81920, 102400],
                         [81920, 122880],
-                        [122880, 143360],
+                        [122880, 147456],
                     ]
                 ),
                 "is_causal_mapping": [False] * 7,
-                "total_seqlen_q": 143360,
-                "total_seqlen_k": 143360,
-                "chunk_size": 1024,
+                "total_seqlen_q": 147456,
+                "total_seqlen_k": 147456,
+                "chunk_size": 4096,
             },
         ],
     )
@@ -466,9 +487,6 @@ class TestPipeline(DistTestBase):
         chunk_size: int = attn_config["chunk_size"]
 
         device = torch.cuda.current_device()
-        process_group_gloo = dist.new_group(
-            ranks=list(range(self.world_size)), backend="gloo"
-        )
 
         overlap_config = OverlapConfig(
             **{k: v for k, v in overlap_config.items() if k not in (NAME, PROFILE_ONLY)}
@@ -493,8 +511,10 @@ class TestPipeline(DistTestBase):
                 if self.rank == 0 and iter == prof_end_iter:
                     torch.cuda.profiler.stop()
 
-                dist.barrier()
-                torch.cuda.synchronize()
+            # -----    barrier at the beginning of each iteration   ---- #
+
+            dist.barrier()
+            torch.cuda.synchronize()
 
             # -----   calc dispatch meta   ---- #
 
@@ -507,8 +527,8 @@ class TestPipeline(DistTestBase):
                 chunk_size=chunk_size,
                 cp_size=self.world_size,
                 cp_rank=self.rank,
-                cp_group_nccl=self.process_group,
-                cp_group_gloo=process_group_gloo,
+                cp_group_nccl=self.nccl_group,
+                cp_group_gloo=self.gloo_group,
                 is_same_source=True,
                 is_q_permutable=True,
                 is_k_permutable=True,
@@ -520,24 +540,26 @@ class TestPipeline(DistTestBase):
                 dispatch_meta_q=meta_q,
                 dispatch_meta_k=meta_k,
                 bucket_per_rank=buckets_per_rank,
-                cp_group_nccl=self.process_group,
-                cp_group_gloo=process_group_gloo,
+                cp_group_nccl=self.nccl_group,
+                cp_group_gloo=self.gloo_group,
                 overlap_config=dist_attn_config.overlap_config,
             )
 
             # -----   sanity check about group cast/reduce   ---- #
 
-            self.check_group_cast_and_group_reduce(
-                comm_meta=comm_meta,
-                device=device,
-            )
+            if not profile_mode:
+                self.check_group_cast_and_group_reduce(
+                    comm_meta=comm_meta,
+                    device=device,
+                )
 
             # -----   init dist attn   ---- #
 
-            dist_attn_runtime = DistFlashAttnRuntime.from_attn_meta(
+            dist_attn_runtime = DistFlashAttnRuntime(
                 comm_meta=comm_meta,
                 calc_meta=calc_meta,
-                cp_group_nccl=self.process_group,
+                cp_group_kv=self.nccl_groups[0],
+                cp_group_dkv=self.nccl_groups[1],
             )
             dist_attn = DistFlashAttn(dist_attn_config)
 
@@ -567,9 +589,9 @@ class TestPipeline(DistTestBase):
                 dtype=dist_attn_config.dtype,
                 requires_grad=True,
             )
-            dist.all_reduce(total_q.data, group=self.process_group)
-            dist.all_reduce(total_k.data, group=self.process_group)
-            dist.all_reduce(total_v.data, group=self.process_group)
+            dist.all_reduce(total_q.data, group=self.nccl_group)
+            dist.all_reduce(total_k.data, group=self.nccl_group)
+            dist.all_reduce(total_v.data, group=self.nccl_group)
 
             # -----   dispatch global qkv to local qkv   ---- #
 
@@ -599,7 +621,7 @@ class TestPipeline(DistTestBase):
             # -----   run backward   ---- #
 
             grad_total_out = torch.randn_like(total_out).detach()
-            dist.all_reduce(grad_total_out.data, group=self.process_group)
+            dist.all_reduce(grad_total_out.data, group=self.nccl_group)
             total_out.backward(grad_total_out)
             grad_total_q, grad_total_k, grad_total_v = (
                 total_q.grad,
@@ -617,8 +639,8 @@ class TestPipeline(DistTestBase):
                     meta_q=meta_q,
                     meta_k=meta_k,
                     buckets_per_rank=buckets_per_rank,
-                    cp_group_nccl=self.process_group,
-                    cp_group_gloo=process_group_gloo,
+                    cp_group_nccl=self.nccl_group,
+                    cp_group_gloo=self.gloo_group,
                     device=device,
                     total_q=total_q,
                     total_k=total_k,
@@ -720,10 +742,12 @@ class TestPipeline(DistTestBase):
         )
 
         # -----   init dist attn for the ref w/o mso  ---- #
-        dist_attn_runtime = DistFlashAttnRuntime.from_attn_meta(
+
+        dist_attn_runtime = DistFlashAttnRuntime(
             comm_meta=comm_meta,
             calc_meta=calc_meta,
-            cp_group_nccl=cp_group_nccl,
+            cp_group_kv=cp_group_nccl,
+            cp_group_dkv=cp_group_nccl,  # use the same group as kv to make sure "safe"
         )
         dist_attn = DistFlashAttn(dist_attn_config_wo_mso)
 
@@ -1033,7 +1057,7 @@ class TestPipeline(DistTestBase):
             output_split_size_list=group_cast_collective_args.output_split_size_list,
             dst_indices_list=group_cast_collective_args.dst_indices_list,
             src_index_list=group_cast_collective_args.src_index_list,
-            group=self.process_group,
+            group=self.nccl_group,
             async_op=True,
         )
         test_output = work.wait_post_process(test_output)
@@ -1045,7 +1069,7 @@ class TestPipeline(DistTestBase):
             output_split_size_list=group_cast_collective_args.input_split_size_list,
             dst_index_list=group_cast_collective_args.src_index_list,
             src_indices_list=group_cast_collective_args.dst_indices_list,
-            group=self.process_group,
+            group=self.nccl_group,
             async_op=True,
         )
 

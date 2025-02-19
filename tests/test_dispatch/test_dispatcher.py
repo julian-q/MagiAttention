@@ -76,7 +76,7 @@ class TestDispatcher(DistTestBase):
 
         # --------------      init global q, k       -------------- #
 
-        global_q = torch.arange(q_ranges.last.end * 2).view(-1, 2).to(device)  # (sq, 2)
+        global_q = torch.arange(q_ranges[-1].end * 2).view(-1, 2).to(device)  # (sq, 2)
         global_k = global_q * -1  # (sq, 2), due to self-attn
 
         # --------------      compute meta       -------------- #

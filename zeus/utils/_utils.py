@@ -1,4 +1,6 @@
+import functools
 import os
+import warnings
 from typing import Any, Callable, Sequence, TypeAlias, Union
 
 import matplotlib.pyplot as plt
@@ -8,6 +10,21 @@ import torch.distributed as dist
 from rich import print as rprint
 
 from . import nvtx
+
+
+def deprecated(func: Callable) -> Callable:
+    """A decorator for deprecated functions"""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        warnings.warn(
+            f"The '{func.__name__}' is deprecated and might be removed in future versions.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def setup_dist_env(

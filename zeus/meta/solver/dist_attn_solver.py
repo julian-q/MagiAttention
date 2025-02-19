@@ -1,5 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Iterator
 
 import torch
 import torch.distributed as dist
@@ -26,55 +27,59 @@ class AttnRangeWithRank(AttnRange):
         self.rank_set = rank_set
 
 
-class GroupCastRanges:
-    def __init__(self, cp_size: int, ranges_list: list[AttnRanges]):
-        assert len(ranges_list) == cp_size
-        self.cp_size = cp_size
-        self.ranges_list = ranges_list
+class GroupCastRanges(AttnRanges):
+    def __init__(
+        self,
+        cp_size: int,
+        ranges_per_rank: list[AttnRanges],
+        split: bool = True,
+    ):
+        super().__init__()
 
-        self.ranges_group = AttnRanges()
+        assert len(ranges_per_rank) == cp_size
+        self._ranges: list[AttnRangeWithRank] = []  # type: ignore
 
-        for cp_rank, ranges in enumerate(ranges_list):
+        for cp_rank, ranges in enumerate(ranges_per_rank):
             for r in ranges:
-                self.ranges_group.append(
+                self._ranges.append(
                     AttnRangeWithRank(rank_set={cp_rank}, start=r.start, end=r.end)
                 )
 
-        self.ranges_group = self.ranges_group.sort()
+        # sort by attn_range.start
+        self._ranges.sort(key=lambda attn_range: attn_range.start)
 
-    def split(self):
-        self.ranges_group = self.ranges_group.sort()
+        if split:
+            self._split()
 
-        if len(self.ranges_group) <= 1:
+    @nvtx.instrument_nvtx
+    def _split(self) -> None:
+        """Split the ranges group as fragmented as possible"""
+
+        if len(self._ranges) <= 1:
             return
 
-        new_ranges_group = AttnRanges()
-
-        # 遍历所有可能的位置点来分割
-        all_points = set()
-        for r in self.ranges_group:
-            all_points.add(r.start)
-            all_points.add(r.end)
-
-        all_points = sorted(list(all_points))
+        new_ranges: list[AttnRangeWithRank] = []
 
         # 对每个区间[p1,p2]判断它被哪些原始range覆盖
+        all_points = self.points
         for i in range(len(all_points) - 1):
             p1, p2 = all_points[i], all_points[i + 1]
 
             # 找出所有覆盖这个区间的ranges
             cover_rank_set = set()
-            for r in self.ranges_group:
-                r: AttnRangeWithRank
+            for r in self._ranges:
                 if r.start <= p1 and r.end >= p2:
                     cover_rank_set.update(r.rank_set)
 
             if cover_rank_set:  # 如果有range覆盖这个区间
-                new_ranges_group.append(
+                new_ranges.append(
                     AttnRangeWithRank(rank_set=cover_rank_set, start=p1, end=p2)
                 )
 
-        self.ranges_group = new_ranges_group
+        self._ranges = new_ranges
+
+    def __iter__(self) -> Iterator[AttnRangeWithRank]:
+        return iter(self._ranges)
 
 
 @dataclass
@@ -138,10 +143,10 @@ class RemoteRankEntry:
 
 @dataclass
 class TransferInfo:
-    k_ranges_global_recv_from_each_rank_list: list[AttnRanges]
-    k_ranges_local_recv_from_each_rank_list: list[AttnRanges]
-    k_ranges_global_send_to_each_rank_list: list[AttnRanges]
-    k_ranges_local_send_to_each_rank_list: list[AttnRanges]
+    k_ranges_global_recv_from_per_rank: list[AttnRanges]
+    k_ranges_local_recv_from_per_rank: list[AttnRanges]
+    k_ranges_global_send_to_per_rank: list[AttnRanges]
+    k_ranges_local_send_to_per_rank: list[AttnRanges]
 
 
 @dataclass
@@ -272,6 +277,7 @@ class TransferTable:
         )
 
 
+# TODO: add specific unitest for attn solver
 class AttnSolver:
     """The attn solver class to process dispatch meta for calc meta and comm meta"""
 
@@ -1011,37 +1017,45 @@ class AttnSolver:
         """Initialize transfer table per stage for this rank"""
 
         transfer_table_per_stage: list[TransferTable] = []
-        for stage, remote_rank_entry_per_rank_this_stage in enumerate(
-            remote_rank_entry_per_rank_per_stage
-        ):
-            transfer_table_per_stage.append(
-                self._init_transfer_table_for_one_stage(
-                    stage,
-                    remote_rank_entry_per_rank_this_stage,
-                )
+
+        transfer_info_per_stage_this_rank: list[TransferInfo] = [
+            self._init_transfer_info_this_rank_for_one_stage(
+                remote_rank_entry_per_rank_this_stage
             )
+            for remote_rank_entry_per_rank_this_stage in (
+                remote_rank_entry_per_rank_per_stage
+            )
+        ]
+
+        transfer_info_per_rank_per_stage = self._init_transfer_info_per_rank_per_stage(
+            transfer_info_per_stage_this_rank
+        )
+
+        transfer_table_per_stage = [
+            self._init_transfer_table_for_one_stage(
+                remote_rank_entry_per_rank_this_stage,
+                transfer_info_per_rank_this_stage,
+            )
+            for (
+                remote_rank_entry_per_rank_this_stage,
+                transfer_info_per_rank_this_stage,
+            ) in zip(
+                remote_rank_entry_per_rank_per_stage,
+                transfer_info_per_rank_per_stage,
+            )
+        ]
 
         return transfer_table_per_stage
 
     @nvtx.instrument_nvtx
     def _init_transfer_table_for_one_stage(
         self,
-        stage: int,
-        remote_rank_entry_per_rank_this_stage: list[RemoteRankEntry],
+        remote_rank_entry_per_rank: list[RemoteRankEntry],
+        transfer_info_per_rank: list[TransferInfo],
     ) -> TransferTable:
         """Initialize transfer table for each overlap stage
         called in 'self._init_transfer_table_per_stage'
         """
-
-        # init transfer info for this rank
-        transfer_info_this_rank = self._init_transfer_info_this_rank(
-            remote_rank_entry_per_rank_this_stage
-        )
-
-        # init transfer info for each rank
-        transfer_info_per_rank = self._init_transfer_info_per_rank(
-            stage, transfer_info_this_rank
-        )
 
         # init transfer table entry for each rank pair: (send_ranki, recv_rankj)
         transfer_table = TransferTable(cp_size=self.cp_size)
@@ -1050,91 +1064,71 @@ class AttnSolver:
         for send_rank in range(self.cp_size):  # for each send_ranki
             transfer_info = transfer_info_per_rank[send_rank]
 
-            # init group_cast_ranges for local k ranges that send_ranki needs to send to
-            group_cast_ranges_local_send_to = GroupCastRanges(
-                cp_size=self.cp_size,
-                ranges_list=transfer_info.k_ranges_local_send_to_each_rank_list,
-            )
-
-            # split the local ranges into non-overlapped local ranges
-            group_cast_ranges_local_send_to.split()
-
-            # for each non-overlapped local k range that send_ranki needs to send to
-            # we tranverse each dest recv_rankj to recv it in the set,
-            # and append it to k_ranges_local_in_send_buf at the (send_ranki, recv_rankj) table entry
-            for r in group_cast_ranges_local_send_to.ranges_group:
-                r: AttnRangeWithRank  # type: ignore
-                for recv_rank in r.rank_set:  # type: ignore
-                    transfer_table.append_k_ranges_local_in_send_buf(
-                        send_rank=send_rank,
-                        recv_rank=recv_rank,
-                        k_range=AttnRange(start=r.start, end=r.end),
-                    )
-
-            # sort the local k ranges to send for each dest recv_rankj
-            for recv_rank in range(self.cp_size):
-                transfer_table.sort_k_ranges_local_in_send_buf(
-                    send_rank=send_rank,
-                    recv_rank=recv_rank,
-                )
-
-            # init group_cast_ranges for global k ranges that send_ranki needs to send to
+            # init group_cast_ranges for global/local k ranges that send_ranki needs to send to
+            # which splits the local ranges into non-overlapped local ranges
             group_cast_ranges_global_transfer = GroupCastRanges(
                 cp_size=self.cp_size,
-                ranges_list=transfer_info.k_ranges_global_send_to_each_rank_list,
+                ranges_per_rank=transfer_info.k_ranges_global_send_to_per_rank,
+            )
+            group_cast_ranges_local_send_to = GroupCastRanges(
+                cp_size=self.cp_size,
+                ranges_per_rank=transfer_info.k_ranges_local_send_to_per_rank,
             )
 
-            # split the global ranges into non-overlapped global ranges
-            group_cast_ranges_global_transfer.split()
-
-            # for each non-overlapped global k range that send_ranki needs to send to
+            # for each non-overlapped global/local k range that send_ranki needs to send to
             # we tranverse each dest recv_rankj to recv it in the set,
             # and append it to k_ranges_local_in_send_buf at the (send_ranki, recv_rankj) table entry
-            for r in group_cast_ranges_global_transfer.ranges_group:
-                r: AttnRangeWithRank  # type: ignore
-                for recv_rank in r.rank_set:  # type: ignore
+            for r in group_cast_ranges_global_transfer:
+                k_range = AttnRange(start=r.start, end=r.end)
+                for recv_rank in r.rank_set:
                     transfer_table.append_k_ranges_global(
                         send_rank=send_rank,
                         recv_rank=recv_rank,
-                        k_range=AttnRange(start=r.start, end=r.end),
+                        k_range=k_range,
+                    )
+            for r in group_cast_ranges_local_send_to:
+                k_range = AttnRange(start=r.start, end=r.end)
+                for recv_rank in r.rank_set:
+                    transfer_table.append_k_ranges_local_in_send_buf(
+                        send_rank=send_rank,
+                        recv_rank=recv_rank,
+                        k_range=k_range,
                     )
 
-            # sort the global k ranges to send for each dest recv_rankj
             for recv_rank in range(self.cp_size):
+                # sort the global/local k ranges to send for each dest recv_rankj
                 transfer_table.sort_k_ranges_global(
                     send_rank=send_rank,
                     recv_rank=recv_rank,
                 )
-
-            # fill k_ranges_local_in_recv_buf
-            for recv_rank in range(self.cp_size):
-                remote_k_ranges_global_for_recv_rank = (
-                    remote_rank_entry_per_rank_this_stage[
-                        recv_rank
-                    ].remote_k_ranges_global
+                transfer_table.sort_k_ranges_local_in_send_buf(
+                    send_rank=send_rank,
+                    recv_rank=recv_rank,
                 )
-
+                # fill k_ranges_local_in_recv_buf
                 transfer_table.make_k_ranges_local_in_recv_buf(
-                    send_rank,
-                    recv_rank,
-                    remote_k_ranges_global_for_recv_rank,
+                    send_rank=send_rank,
+                    recv_rank=recv_rank,
+                    remote_k_ranges_global_for_recv_rank=remote_rank_entry_per_rank[
+                        recv_rank
+                    ].remote_k_ranges_global,
                 )
 
         return transfer_table
 
     @nvtx.instrument_nvtx
-    def _init_transfer_info_this_rank(
+    def _init_transfer_info_this_rank_for_one_stage(
         self,
-        remote_rank_entry_per_rank_this_stage: list[RemoteRankEntry],
+        remote_rank_entry_per_rank: list[RemoteRankEntry],
     ) -> TransferInfo:
-        """Initialize transfer info for current overlap stage for this rank,
-        called in 'self._init_transfer_table_for_one_stage'
+        """Initialize transfer info for this rank for certain stage
+        called in 'self._init_transfer_table_per_stage'
         """
 
-        host_k_ranges_global_this_rank = remote_rank_entry_per_rank_this_stage[
+        host_k_ranges_global_this_rank = remote_rank_entry_per_rank[
             self.cp_rank
         ].host_k_ranges_global
-        remote_k_ranges_global_this_rank = remote_rank_entry_per_rank_this_stage[
+        remote_k_ranges_global_this_rank = remote_rank_entry_per_rank[
             self.cp_rank
         ].remote_k_ranges_global
 
@@ -1143,16 +1137,16 @@ class AttnSolver:
         # 1. initalize recv transfer info
         for rank in range(self.cp_size):
             if rank == self.cp_rank:  # no need to recv from this rank
-                transfer_info_this_rank.k_ranges_global_recv_from_each_rank_list.append(
+                transfer_info_this_rank.k_ranges_global_recv_from_per_rank.append(
                     AttnRanges()
                 )
-                transfer_info_this_rank.k_ranges_local_recv_from_each_rank_list.append(
+                transfer_info_this_rank.k_ranges_local_recv_from_per_rank.append(
                     AttnRanges()
                 )
                 continue
 
             # get the global k ranges that this rank needs to recv from current rank
-            rank_host_k_ranges_global = remote_rank_entry_per_rank_this_stage[
+            rank_host_k_ranges_global = remote_rank_entry_per_rank[
                 rank
             ].host_k_ranges_global
             k_ranges_global_recv_from_rank = (
@@ -1170,26 +1164,26 @@ class AttnSolver:
                 )
             )
             # add to recv transfer info for both global and local ones
-            transfer_info_this_rank.k_ranges_global_recv_from_each_rank_list.append(
+            transfer_info_this_rank.k_ranges_global_recv_from_per_rank.append(
                 k_ranges_global_recv_from_rank
             )
-            transfer_info_this_rank.k_ranges_local_recv_from_each_rank_list.append(
+            transfer_info_this_rank.k_ranges_local_recv_from_per_rank.append(
                 k_ranges_local_recv_from_rank
             )
 
         # 2. initalize send transfer info
         for rank in range(self.cp_size):
             if rank == self.cp_rank:  # no need to send to this rank
-                transfer_info_this_rank.k_ranges_global_send_to_each_rank_list.append(
+                transfer_info_this_rank.k_ranges_global_send_to_per_rank.append(
                     AttnRanges()
                 )
-                transfer_info_this_rank.k_ranges_local_send_to_each_rank_list.append(
+                transfer_info_this_rank.k_ranges_local_send_to_per_rank.append(
                     AttnRanges()
                 )
                 continue
 
             # get the global k ranges that this rank needs to send to current rank
-            rank_remote_k_ranges_global = remote_rank_entry_per_rank_this_stage[
+            rank_remote_k_ranges_global = remote_rank_entry_per_rank[
                 rank
             ].remote_k_ranges_global
             k_ranges_global_send_to_rank = (
@@ -1207,64 +1201,79 @@ class AttnSolver:
                 )
             )
             # add to send transfer info for both global and local ones
-            transfer_info_this_rank.k_ranges_global_send_to_each_rank_list.append(
+            transfer_info_this_rank.k_ranges_global_send_to_per_rank.append(
                 k_ranges_global_send_to_rank
             )
-            transfer_info_this_rank.k_ranges_local_send_to_each_rank_list.append(
+            transfer_info_this_rank.k_ranges_local_send_to_per_rank.append(
                 k_ranges_local_send_to_rank
             )
 
         return transfer_info_this_rank
 
     @nvtx.instrument_nvtx
-    def _init_transfer_info_per_rank(
+    def _init_transfer_info_per_rank_per_stage(
         self,
-        stage: int,
-        transfer_info_this_rank: TransferInfo,
-    ) -> list[TransferInfo]:
-        """Initialize transfer info for current overlap stage per rank,
-        called in 'self._init_transfer_table_for_one_stage'
+        transfer_info_per_stage_this_rank: list[TransferInfo],
+    ) -> list[list[TransferInfo]]:
+        """Initialize transfer info per rank for each stage
+        called in 'self._init_transfer_table_per_stage'
         """
 
-        # all gather initial recv/send transfer info for each rank
-        transfer_info_per_rank: list[TransferInfo] = [None] * self.cp_size  # type: ignore
+        # all gather transfer info per stage from each rank
+        transfer_info_per_stage_per_rank = [None] * self.cp_size
         with nvtx.add_nvtx_event("transfer_info_ag"):
             dist.all_gather_object(
-                transfer_info_per_rank,
-                transfer_info_this_rank,
+                transfer_info_per_stage_per_rank,
+                transfer_info_per_stage_this_rank,
                 group=self.cp_group_nccl,
             )
 
+        # check shape to be [cp_size, overlap_degree]
+        if zeus.is_sanity_check_enable():
+            assert (
+                len(transfer_info_per_stage_per_rank) == self.cp_size
+                and len(transfer_info_per_stage_per_rank[0]) == self.overlap_degree  # type: ignore
+            )
+
+        # transpose to be transfer info per rank for each stage
+        transfer_info_per_rank_per_stage = transpose_matrix(
+            transfer_info_per_stage_per_rank  # type: ignore
+        )
+
         # sanity check
         if zeus.is_sanity_check_enable():
-            # for each rank pair (i≠j): (send_ranki, recv_rankj)
-            #    whether the global k ranges that send_ranki needs to send to recv_rankj
-            #    are equal to the ones that recv_rankj needs to recv from send_ranki
-            for send_rank in range(self.cp_size):
-                for recv_rank in range(self.cp_size):
-                    if send_rank == recv_rank:
-                        continue
+            # for each stage:
+            #   for each rank pair (i≠j): (send_ranki, recv_rankj)
+            #       whether the global k ranges that send_ranki needs to send to recv_rankj
+            #       are equal to the ones that recv_rankj needs to recv from send_ranki
+            for stage, transfer_info_per_rank in enumerate(
+                transfer_info_per_rank_per_stage
+            ):
+                for send_rank in range(self.cp_size):
+                    for recv_rank in range(self.cp_size):
+                        if send_rank == recv_rank:
+                            continue
 
-                    send_info: TransferInfo = transfer_info_per_rank[send_rank]
-                    recv_info: TransferInfo = transfer_info_per_rank[recv_rank]
-                    k_ranges_global_recv_from_send_rank = (
-                        recv_info.k_ranges_global_recv_from_each_rank_list[send_rank]
-                    )
-                    k_ranges_global_send_to_recv_rank = (
-                        send_info.k_ranges_global_send_to_each_rank_list[recv_rank]
-                    )
+                        send_info: TransferInfo = transfer_info_per_rank[send_rank]
+                        recv_info: TransferInfo = transfer_info_per_rank[recv_rank]
+                        k_ranges_global_recv_from_send_rank = (
+                            recv_info.k_ranges_global_recv_from_per_rank[send_rank]
+                        )
+                        k_ranges_global_send_to_recv_rank = (
+                            send_info.k_ranges_global_send_to_per_rank[recv_rank]
+                        )
 
-                    assert (
-                        k_ranges_global_recv_from_send_rank
-                        == k_ranges_global_send_to_recv_rank
-                    ), (
-                        f"The sanity check for transfer table at {stage=} failed:\n"
-                        f"For rank pair ({send_rank=} {recv_rank=}), we got:\n"
-                        f"{k_ranges_global_recv_from_send_rank=}\n"
-                        f"{k_ranges_global_send_to_recv_rank=}"
-                    )
+                        assert (
+                            k_ranges_global_recv_from_send_rank
+                            == k_ranges_global_send_to_recv_rank
+                        ), (
+                            f"The sanity check for transfer table at {stage=} failed:\n"
+                            f"For rank pair ({send_rank=} {recv_rank=}), we got:\n"
+                            f"{k_ranges_global_recv_from_send_rank=}\n"
+                            f"{k_ranges_global_send_to_recv_rank=}"
+                        )
 
-        return transfer_info_per_rank
+        return transfer_info_per_rank_per_stage
 
     @nvtx.instrument_nvtx
     def calc_comm_meta(self) -> CommMeta:
@@ -1311,9 +1320,10 @@ class AttnSolver:
         called in 'self.calc_comm_meta'
         """
         # retrieve group cast ranges for local k ranges that this rank needs to send to
+        # which splits the local ranges into non-overlapped local ranges
         group_cast_ranges_local_send_to = GroupCastRanges(
-            self.cp_size,
-            [
+            cp_size=self.cp_size,
+            ranges_per_rank=[
                 transfer_table.get_k_ranges_local_in_send_buf(
                     send_rank=self.cp_rank,
                     recv_rank=recv_rank,
@@ -1322,16 +1332,12 @@ class AttnSolver:
             ],
         )
 
-        # split the local ranges into non-overlapped local ranges
-        group_cast_ranges_local_send_to.split()
-
         # calc input split size list with dst indices list
         input_split_size_list: list[int] = []
         dst_indices_list: list[list[int]] = []
 
         last_end = 0
-        for r in group_cast_ranges_local_send_to.ranges_group:
-            r: AttnRangeWithRank  # type: ignore
+        for r in group_cast_ranges_local_send_to:
             if r.start != last_end:  # [last_end, r.start) has no dest rank
                 # FIXME: this branch is unreachable in the current test cases
                 input_split_size_list.append(r.start - last_end)
@@ -1347,22 +1353,22 @@ class AttnSolver:
 
         # retrieve group cast ranges for local k ranges that this rank needs to recv from
         group_cast_ranges_local_recv_from = GroupCastRanges(
-            self.cp_size,
-            [
+            cp_size=self.cp_size,
+            ranges_per_rank=[
                 transfer_table.get_k_ranges_local_in_recv_buf(
                     send_rank=send_rank,
                     recv_rank=self.cp_rank,
                 )
                 for send_rank in range(self.cp_size)
             ],
+            split=False,  # NOTE: no need to split group cast ranges for recv
         )
 
         # calc output split size list with src index list
         output_split_size_list = []
         src_index_list = []
 
-        for r in group_cast_ranges_local_recv_from.ranges_group:
-            r: AttnRangeWithRank  # type: ignore
+        for r in group_cast_ranges_local_recv_from:
             output_split_size_list.append(r.seqlen)
 
             if zeus.is_sanity_check_enable():
