@@ -1,5 +1,3 @@
-import os
-
 """
 comm
 common
@@ -48,6 +46,17 @@ TODO:
     4. comm-kernel
     5. abitrary-attn-mask(V2)
 """
+
+import os
+
+from . import config
+from .dist_attn_runtime_mgr import init_dist_attn_runtime_mgr
+
+__all__ = [
+    "init_dist_attn_runtime_mgr",
+    "is_sanity_check_enable",
+    "config",
+]
 
 
 def is_sanity_check_enable() -> bool:

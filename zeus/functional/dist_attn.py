@@ -9,11 +9,138 @@ from flash_attn_interface import _flex_flash_attn_backward, _flex_flash_attn_for
 
 from zeus.comm.primitive import group_cast_collective, group_reduce_collective
 from zeus.comm.work import WorkWithPostProcessFn
-from zeus.common.config import DistFlashAttnConfig
 from zeus.meta.collection import AttnCalcMeta, CommMeta
-from zeus.utils import deprecated, nvtx
+from zeus.utils import nvtx
 
 logger = getLogger("zeus")
+
+
+@nvtx.instrument_nvtx
+def safe_subtract(
+    a: torch.Tensor,
+    b: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Safely subtracts two tensors. where the subtraction results of two -inf will be set to -inf.
+    """
+
+    eq = (a == b) & (a == float("-inf"))
+    sub = a - b
+    sub = torch.where(eq, torch.fill(sub, float("-inf")), sub)
+
+    # A faster way to do the same thing as the above
+    # neg_inf = (a == b) & (a == float("-inf"))
+    # not_neg_inf = torch.logical_not(neg_inf)
+    # b_not_neg_inf = b * not_neg_inf.float()
+    # sub_comp = a - b_not_neg_inf
+
+    # assert torch.testing.assert_close(sub, sub_comp)
+    return sub
+
+
+@nvtx.instrument_nvtx
+def correct_attn_lse(
+    lse1: torch.Tensor,
+    lse2: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Corrects the log sum exp tensor for online attention.
+
+    Args:
+        lse1(torch.Tensor): log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
+        lse2(torch.Tensor): log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
+
+    Returns:
+        lse(torch.Tensor): corrected log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
+    """
+    min_lse = torch.min(lse1, lse2).to(torch.float32)
+    max_lse = torch.max(lse1, lse2).to(torch.float32)
+
+    # formula: lse = log(exp(lse1) + exp(lse2))
+    #              = lse1 + log(1 + exp(lse2 - lse1))
+    #              = max_lse + log(1 + exp(min_lse - max_lse))
+    #              = max_lse + log1p(exp(min_lse - max_lse))
+    #              = max_lse + softplus(min_lse - max_lse)
+    lse = max_lse + F.softplus(safe_subtract(min_lse, max_lse))
+
+    return lse.to(lse1.dtype)
+
+
+@nvtx.instrument_nvtx
+def correct_attn_output(
+    o1: torch.Tensor,
+    lse1: torch.Tensor,
+    o2: torch.Tensor,
+    lse2: torch.Tensor,
+    lse: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Corrects the output tensor for online attention.
+
+    Args:
+        o1(torch.Tensor): local output tensor o1, with shape: [batch_size, seq_len, num_heads, head_dim]
+        lse1(torch.Tensor): local lse for o1, with shape: [batch_size, num_heads, seq_len]
+        o2(torch.Tensor): local output tensor o2, with shape: [batch_size, seq_len, num_heads, head_dim]
+        lse2(torch.Tensor): local lse for o2, with shape: [batch_size, num_heads, seq_len]
+        lse(torch.Tensor): global lse, with shape: [batch_size, num_heads, seq_len]
+
+    Returns:
+        o(torch.Tensor): corrected global output tensor, with shape: [batch_size, seq_len, num_heads, head_dim]
+    """
+    # formula: lsei_ = exp(lsei - lse)
+    # shape: [b, h, s] -> [b, s, h] -> [b, s, h, 1]
+    lse1_, lse2_ = [
+        safe_subtract(lsei, lse).exp().transpose(-1, -2).unsqueeze(-1).to(torch.float32)
+        for lsei in [lse1, lse2]
+    ]
+
+    o = lse1_ * o1 + lse2_ * o2
+
+    return o.to(o1.dtype)
+
+
+@nvtx.instrument_nvtx
+def result_correction(
+    out_list: list[torch.Tensor],
+    lse_list: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    对attn结果进行correction
+
+    Args:
+        out_list(list[torch.Tensor]):
+        lse_list(list[torch.Tensor]):
+
+    Returns:
+        out(torch.Tensor):
+        lse(torch.Tensor):
+
+    Shape:
+        - out: [num_tokens_q, num_heads, head_dim]
+        - lse: [num_heads, num_tokens_q]
+    """
+    curr_lse = None
+    curr_out = None
+
+    for i in range(len(lse_list) - 1):
+        if i == 0:
+            curr_lse = correct_attn_lse(lse_list[0], lse_list[1])
+            curr_out = correct_attn_output(
+                out_list[0], lse_list[0], out_list[1], lse_list[1], curr_lse
+            )
+        else:
+            original_lse = curr_lse
+            original_out = curr_out
+            curr_lse = correct_attn_lse(original_lse, lse_list[i + 1])
+            curr_out = correct_attn_output(
+                original_out,
+                original_lse,
+                out_list[i + 1],
+                lse_list[i + 1],
+                curr_lse,
+            )
+
+    return curr_out, curr_lse
 
 
 class DistFlashAttnRuntime:
@@ -44,6 +171,7 @@ class DistFlashAttnRuntime:
         calc_meta: AttnCalcMeta,
         cp_group_kv: dist.ProcessGroup,
         cp_group_dkv: dist.ProcessGroup,
+        deterministic: bool,
     ):
         assert dist.get_backend(cp_group_kv) == dist.Backend.NCCL
         assert dist.get_backend(cp_group_dkv) == dist.Backend.NCCL
@@ -52,6 +180,7 @@ class DistFlashAttnRuntime:
         self.calc_meta = calc_meta
         self.cp_group_kv = cp_group_kv
         self.cp_group_dkv = cp_group_dkv
+        self.deterministic = deterministic
 
         # NOTE: get the real overlap degree from comm meta
         # instead of the initial one from overlap config
@@ -139,7 +268,6 @@ class DistFlashAttnRuntime:
             out(torch.Tensor):
             lse(torch.Tensor): log sum exp
 
-
         Shape:
             - q: [num_tokens_q, num_heads, head_dim]
             - kv: [num_tokens_kv, num_heads, head_dim]
@@ -198,54 +326,6 @@ class DistFlashAttnRuntime:
                 out[start:end] = 0
 
         return out, lse
-
-    @nvtx.instrument_nvtx
-    def result_correction(
-        self,
-        out_list: list[torch.Tensor],
-        lse_list: list[torch.Tensor],
-        overlap_degree: int = 1,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        对attn结果进行correction
-
-        Args:
-            out_list(list[torch.Tensor]):
-            lse_list(list[torch.Tensor]):
-
-        Returns:
-            out(torch.Tensor):
-            lse(torch.Tensor):
-
-        Shape:
-            - out: [num_tokens_q, num_heads, head_dim]
-            - lse: [num_heads, num_tokens_q]
-        """
-        # 当overlap_degree为1时, 也至少有2个lse和out, 一个是local的, 一个是remote的
-        assert len(out_list) == len(lse_list) == overlap_degree + 1
-
-        curr_lse = None
-        curr_out = None
-
-        for i in range(overlap_degree):
-            if i == 0:
-                curr_lse = self.correct_attn_lse(lse_list[0], lse_list[1])
-                curr_out = self.correct_attn_output(
-                    out_list[0], lse_list[0], out_list[1], lse_list[1], curr_lse
-                )
-            else:
-                original_lse = curr_lse
-                original_out = curr_out
-                curr_lse = self.correct_attn_lse(original_lse, lse_list[i + 1])
-                curr_out = self.correct_attn_output(
-                    original_out,
-                    original_lse,
-                    out_list[i + 1],
-                    lse_list[i + 1],
-                    curr_lse,
-                )
-
-        return curr_out, curr_lse
 
     @nvtx.instrument_nvtx
     def attn_bwd_partial(
@@ -344,108 +424,6 @@ class DistFlashAttnRuntime:
         """chunk the kv tensor into k, v tensor views"""
         return torch.chunk(kv, 2, dim=0)
 
-    @staticmethod
-    def safe_subtract(
-        a: torch.Tensor,
-        b: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Safely subtracts two tensors. where the subtraction results of two -inf will be set to -inf.
-        """
-
-        eq = (a == b) & (a == float("-inf"))
-        sub = a - b
-        sub = torch.where(eq, torch.fill(sub, float("-inf")), sub)
-
-        # A faster way to do the same thing as the above
-        # neg_inf = (a == b) & (a == float("-inf"))
-        # not_neg_inf = torch.logical_not(neg_inf)
-        # b_not_neg_inf = b * not_neg_inf.float()
-        # sub_comp = a - b_not_neg_inf
-
-        # assert torch.testing.assert_close(sub, sub_comp)
-        return sub
-
-    @staticmethod
-    @nvtx.instrument_nvtx
-    def correct_attn_lse(
-        lse1: torch.Tensor,
-        lse2: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Corrects the log sum exp tensor for online attention.
-
-        Args:
-            lse1(torch.Tensor): log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
-            lse2(torch.Tensor): log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
-
-        Returns:
-            lse(torch.Tensor): corrected log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
-        """
-        min_lse = torch.min(lse1, lse2).to(torch.float32)
-        max_lse = torch.max(lse1, lse2).to(torch.float32)
-
-        # formula: lse = log(exp(lse1) + exp(lse2))
-        #              = lse1 + log(1 + exp(lse2 - lse1))
-        #              = max_lse + log(1 + exp(min_lse - max_lse))
-        #              = max_lse + log1p(exp(min_lse - max_lse))
-        #              = max_lse + softplus(min_lse - max_lse)
-        lse = max_lse + F.softplus(DistFlashAttnRuntime.safe_subtract(min_lse, max_lse))
-
-        return lse.to(lse1.dtype)
-
-    @staticmethod
-    @nvtx.instrument_nvtx
-    def correct_attn_output(
-        o1: torch.Tensor,
-        lse1: torch.Tensor,
-        o2: torch.Tensor,
-        lse2: torch.Tensor,
-        lse: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Corrects the output tensor for online attention.
-
-        Args:
-            o1(torch.Tensor): local output tensor o1, with shape: [batch_size, seq_len, num_heads, head_dim]
-            lse1(torch.Tensor): local lse for o1, with shape: [batch_size, num_heads, seq_len]
-            o2(torch.Tensor): local output tensor o2, with shape: [batch_size, seq_len, num_heads, head_dim]
-            lse2(torch.Tensor): local lse for o2, with shape: [batch_size, num_heads, seq_len]
-            lse(torch.Tensor): global lse, with shape: [batch_size, num_heads, seq_len]
-
-        Returns:
-            o(torch.Tensor): corrected global output tensor, with shape: [batch_size, seq_len, num_heads, head_dim]
-        """
-        # formula: lsei_ = exp(lsei - lse)
-        # shape: [b, h, s] -> [b, s, h] -> [b, s, h, 1]
-        lse1_, lse2_ = [
-            DistFlashAttnRuntime.safe_subtract(lsei, lse)
-            .exp()
-            .transpose(-1, -2)
-            .unsqueeze(-1)
-            .to(torch.float32)
-            for lsei in [lse1, lse2]
-        ]
-
-        o = lse1_ * o1 + lse2_ * o2
-
-        return o.to(o1.dtype)
-
-    @classmethod
-    @deprecated
-    def from_attn_meta(
-        cls,
-        comm_meta: CommMeta,
-        calc_meta: AttnCalcMeta,
-        cp_group_nccl: dist.ProcessGroup,
-    ) -> "DistFlashAttnRuntime":
-        return cls(
-            comm_meta=comm_meta,
-            calc_meta=calc_meta,
-            cp_group_kv=cp_group_nccl,
-            cp_group_dkv=cp_group_nccl,
-        )
-
 
 class DistFlashAttnFunc(torch.autograd.Function):
     """Distributed Flash Attention Function"""
@@ -456,7 +434,6 @@ class DistFlashAttnFunc(torch.autograd.Function):
         local_q: torch.Tensor,
         local_k: torch.Tensor,
         local_v: torch.Tensor,
-        dist_attn_config: DistFlashAttnConfig,
         dist_attn_runtime: DistFlashAttnRuntime,
     ):
         """
@@ -466,7 +443,6 @@ class DistFlashAttnFunc(torch.autograd.Function):
             local_q(torch.Tensor):
             local_k(torch.Tensor):
             local_v(torch.Tensor):
-            dist_attn_config(DistFlashAttnConfig):
             dist_attn_runtime(DistFlashAttnRuntime):
 
         Returns:
@@ -496,7 +472,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
             q=local_q,
             kv=local_kv,
             overlap_stage=None,
-            deterministic=dist_attn_config.deterministic,
+            deterministic=dist_attn_runtime.deterministic,
         )
         out_list.append(out)
         lse_list.append(lse)
@@ -520,30 +496,26 @@ class DistFlashAttnFunc(torch.autograd.Function):
                 q=local_q,
                 kv=curr_remote_kv,
                 overlap_stage=ith_overlap_stage,
-                deterministic=dist_attn_config.deterministic,
+                deterministic=dist_attn_runtime.deterministic,
             )
 
             out_list.append(out)
             lse_list.append(lse)
 
         # do result correction to get final out and lse
-        out, lse = dist_attn_runtime.result_correction(
+        out, lse = result_correction(
             out_list=out_list,
             lse_list=lse_list,
-            overlap_degree=dist_attn_runtime.overlap_degree,
         )
 
         ctx.save_for_backward(local_q, local_kv, out, lse)
-        ctx.dist_attn_config = dist_attn_config
         ctx.dist_attn_runtime = dist_attn_runtime
-
         # TODO: return lse as fa
-        return out
+        return out, lse
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
+    def backward(ctx, grad_output: torch.Tensor, *args):
         local_q, local_kv, out, final_lse = ctx.saved_tensors
-        dist_attn_config: DistFlashAttnConfig = ctx.dist_attn_config
         dist_attn_runtime: DistFlashAttnRuntime = ctx.dist_attn_runtime
 
         # pre-fetch 0th remote kv
@@ -564,7 +536,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
             o=out,
             lse=final_lse,
             overlap_stage=None,
-            deterministic=dist_attn_config.deterministic,
+            deterministic=dist_attn_runtime.deterministic,
         )
 
         partial_local_dkv_work = WorkWithPostProcessFn()
@@ -593,7 +565,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
                 o=out,
                 lse=final_lse,
                 overlap_stage=ith_overlap_stage,
-                deterministic=dist_attn_config.deterministic,
+                deterministic=dist_attn_runtime.deterministic,
             )
 
             # reduce ith partial dkv
@@ -629,17 +601,10 @@ class DistFlashAttnFunc(torch.autograd.Function):
         return partial_local_dq, partial_local_dk, partial_local_dv, None, None
 
 
-class DistFlashAttn(torch.nn.Module):
-    """
-    Distributed Flash Attention module class
-
-    Args:
-        config(DistFlashAttnConfig): Configuration for distributed Flash Attention
-    """
-
-    def __init__(self, config: DistFlashAttnConfig):
-        super().__init__()
-        self.config = config
-
-    def forward(self, q, k, v, dist_attn_runtime: DistFlashAttnRuntime):
-        return DistFlashAttnFunc.apply(q, k, v, self.config, dist_attn_runtime)
+def dist_attn_func(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    dist_attn_runtime: DistFlashAttnRuntime,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return DistFlashAttnFunc.apply(q, k, v, dist_attn_runtime)

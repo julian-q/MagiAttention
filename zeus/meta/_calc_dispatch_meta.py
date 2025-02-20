@@ -1,9 +1,12 @@
-import torch.distributed as dist
-
 from zeus.common import AttnRange, AttnRanges
-from zeus.common.enum import AttnMaskType, AttnRole, AttnType, DispatchAlgorithm
+from zeus.common.enum import AttnMaskType, AttnRole, AttnType
 from zeus.meta.collection import DispatchMeta
 from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
+from zeus.meta.solver.dispatch_solver import (
+    DispatchConfig,
+    DispatchSolution,
+    DispatchSolver,
+)
 from zeus.utils import (
     flatten_nested_list,
     is_list_value_all,
@@ -11,8 +14,6 @@ from zeus.utils import (
     perm_idxs2unperm_idxs,
     wrap_to_list,
 )
-
-from .dispatch_solver import DispatchSolver
 
 __all__ = [
     "calc_dispatch_meta_from_qk_ranges",
@@ -31,12 +32,10 @@ def calc_dispatch_meta_from_qk_ranges(
     chunk_size: int,
     cp_size: int,
     cp_rank: int,
-    cp_group_nccl: dist.ProcessGroup,
-    cp_group_gloo: dist.ProcessGroup,
+    dispatch_config: DispatchConfig,
     is_same_source: bool,
     is_q_permutable: bool,
     is_k_permutable: bool,
-    dispatch_solve_alg: DispatchAlgorithm = DispatchAlgorithm.MIN_HEAP,
 ) -> tuple[DispatchMeta, DispatchMeta, list[AttnBucket]]:
     """Calculate dispatch meta from query and key ranges
 
@@ -52,8 +51,8 @@ def calc_dispatch_meta_from_qk_ranges(
 
         cp_size (int): context-parallel world size
         cp_rank (int): context-parallel local rank, ranging in [0,  cp_size)
-        cp_group_nccl (dist.ProcessGroup | None): nccl process group
-        cp_group_gloo (dist.ProcessGroup | None): gloo process group
+
+        dispatch_config (DispatchConfig): dispatch config
 
         is_same_source (bool): is query tensor and key tensor share the same source
         is_q_permutable (bool): is query tensor permutable
@@ -68,8 +67,6 @@ def calc_dispatch_meta_from_qk_ranges(
                 3. for multi-modal transformer with external encoders, it applies 'cross-attn' as follows:
                     a) is_same_source is False
                     b) q is unpermutable cuz of self-attn, but k is permutable even in a different way
-
-        dispatch_solve_alg (DispatchAlgorithm): dispatch algorithm type
 
     Returns:
         tuple[DispatchMeta, DispatchMeta]: dispatch_meta_q and dispatch_meta_k
@@ -106,6 +103,15 @@ def calc_dispatch_meta_from_qk_ranges(
         "where is_same_source is True and both q and k are permutable"
     )
 
+    assert (
+        dispatch_config.alg.is_partitions_returned
+        and dispatch_config.alg.is_equal_num_workloads
+    ), (
+        "For now, only support dispatch config with "
+        "the algorithm that returns the partitions, each of which shares the equal number of workloads, "
+        f"bot got {dispatch_config.alg=}."
+    )
+
     # TODO: limited to all full attn masks for now
     assert is_list_value_all(
         attn_mask_type, AttnMaskType.FULL
@@ -129,9 +135,7 @@ def calc_dispatch_meta_from_qk_ranges(
                 chunk_size=chunk_size,
                 cp_size=cp_size,
                 cp_rank=cp_rank,
-                cp_group_nccl=cp_group_nccl,
-                cp_group_gloo=cp_group_gloo,
-                dispatch_solve_alg=dispatch_solve_alg,
+                dispatch_config=dispatch_config,
             )
         elif not (is_q_permutable and is_k_permutable):
             raise NotImplementedError("A trivial case with no need to dispatch.")
@@ -168,9 +172,7 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
     chunk_size: int,
     cp_size: int,
     cp_rank: int,
-    cp_group_nccl: dist.ProcessGroup,
-    cp_group_gloo: dist.ProcessGroup,
-    dispatch_solve_alg: DispatchAlgorithm = DispatchAlgorithm.MIN_HEAP,
+    dispatch_config: DispatchConfig,
 ) -> tuple[DispatchMeta, DispatchMeta, list[AttnBucket]]:
     """Calculate dispatch meta from query and key ranges for self-attn settings
 
@@ -189,10 +191,8 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
 
         cp_size (int): context-parallel world size
         cp_rank (int): context-parallel local rank, ranging in [0,  cp_size)
-        cp_group_nccl (dist.ProcessGroup | None): nccl process group
-        cp_group_gloo (dist.ProcessGroup | None): gloo process group
 
-        dispatch_solve_alg (DispatchAlgorithm): dispatch algorithm type
+        dispatch_config (DispatchConfig): dispatch config
 
     Returns:
         tuple[DispatchMeta, DispatchMeta]: dispatch_meta_q and dispatch_meta_k
@@ -239,17 +239,17 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
 
     # -------    solve dispatch load balancing and get chunk partitions   ------- #
 
-    dispatch_solver = DispatchSolver(alg=dispatch_solve_alg)
-
-    _, _, partitions = dispatch_solver.solve(
+    dispatch_solver = DispatchSolver(alg=dispatch_config.alg)
+    dispatch_solution: DispatchSolution = dispatch_solver.solve(
         jobs=attn_areas,  # type: ignore
         k=cp_size,
     )
+    partitions = dispatch_solution.bucket_partitions
 
     # since the order for any partition of chunk ids doesn't matter,
     # here we just keep it sorted ascendingly, like (0,5,4) -> (0,4,5)
-    partitions = [sorted(p) for p in partitions]  # type: ignore
-    partitions_perm_idxs = flatten_nested_list(partitions)  # type: ignore
+    partitions = [sorted(p) for p in partitions]
+    partitions_perm_idxs = flatten_nested_list(partitions)
     partitions_unperm_idxs = perm_idxs2unperm_idxs(partitions_perm_idxs)
 
     # --------------      construct buckets per rank       -------------- #
@@ -277,8 +277,6 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         total_seqlen=total_seqlen,
         cp_rank=cp_rank,
         cp_size=cp_size,
-        cp_group_nccl=cp_group_nccl,
-        cp_group_gloo=cp_group_gloo,
         chunk_size=chunk_size,
         num_chunks=num_chunks,
         seqlens=seqlens,

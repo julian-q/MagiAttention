@@ -5,9 +5,10 @@ from torch.testing._internal.common_utils import run_tests
 
 from zeus.common import AttnRanges
 from zeus.common.enum import AttnMaskType
+from zeus.config import DispatchConfig, MinHeapDispatchAlg
 from zeus.functional import dispatch_func, undispatch_func
-from zeus.meta.solver import calc_dispatch_meta_from_qk_ranges
-from zeus.meta.solver._calc_dispatch_meta import cu_seqlens2seqlens, seqlens2cu_seqlens
+from zeus.meta import calc_dispatch_meta_from_qk_ranges
+from zeus.meta._calc_dispatch_meta import cu_seqlens2seqlens, seqlens2cu_seqlens
 from zeus.testing.dist_common import DistTestBase, with_comms
 
 WORLD_SIZE = 4
@@ -34,12 +35,9 @@ class TestDispatcher(DistTestBase):
 
         rank = self.rank
         cp_size = self.world_size
-        world_group_nccl = self.process_group
         manual_seed = self.seed
         device = torch.cuda.current_device()
         torch.manual_seed(manual_seed)
-
-        world_group_gloo = dist.new_group(ranks=list(range(cp_size)), backend="gloo")
 
         # --------------      init sample meta      -------------- #
 
@@ -71,8 +69,8 @@ class TestDispatcher(DistTestBase):
         ]
 
         chunk_size = 4
-
         seq_dim = 0
+        dispatch_config = DispatchConfig(alg=MinHeapDispatchAlg())
 
         # --------------      init global q, k       -------------- #
 
@@ -90,8 +88,7 @@ class TestDispatcher(DistTestBase):
             chunk_size=chunk_size,
             cp_rank=rank,
             cp_size=cp_size,
-            cp_group_nccl=world_group_nccl,
-            cp_group_gloo=world_group_gloo,
+            dispatch_config=dispatch_config,
             is_same_source=is_same_source,
             is_q_permutable=is_q_permutable,
             is_k_permutable=is_k_permutable,
@@ -103,12 +100,14 @@ class TestDispatcher(DistTestBase):
 
         host_q = dispatch_func(
             x_global=global_q,
+            group=self.process_group,
             meta=meta_q,
             seq_dim=seq_dim,
         )
 
         host_k = dispatch_func(
             x_global=global_k,
+            group=self.process_group,
             meta=meta_k,
             seq_dim=seq_dim,
         )
@@ -117,12 +116,14 @@ class TestDispatcher(DistTestBase):
 
         global_q_und = undispatch_func(
             x_local=host_q,
+            group=self.process_group,
             meta=meta_q,
             seq_dim=seq_dim,
         )
 
         global_k_und = undispatch_func(
             x_local=host_k,
+            group=self.process_group,
             meta=meta_k,
             seq_dim=seq_dim,
         )

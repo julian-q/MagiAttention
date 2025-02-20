@@ -1,9 +1,117 @@
 import random
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass
 
 import torch.nn as nn
 
-from zeus.common.enum import OverlapAlgorithm
+from zeus.common.enum import AttnOverlapMode, OverlapAlgType
+
+
+@dataclass
+class OverlapAlg(ABC):
+    """The abstract config/meta info dataclass for specific overlap algorithm"""
+
+    @property
+    @abstractmethod
+    def type(self) -> OverlapAlgType:
+        """The type enum of the overlap algorithm"""
+
+    @property
+    @abstractmethod
+    def is_optimal(self) -> bool:
+        """Whether the overlap algorithm is optimal"""
+
+
+@dataclass
+class UniformOverlapAlg(OverlapAlg):
+    """The config/meta info dataclass for the uniform overlap algorithm"""
+
+    random_costs: bool = False
+    random_seed: int | None = None
+
+    @property
+    def type(self) -> OverlapAlgType:
+        return OverlapAlgType.UNIFORM
+
+    @property
+    def is_optimal(self) -> bool:
+        """Whether the overlap algorithm is optimal"""
+        return False
+
+
+@dataclass
+class GreedyOverlapAlg(OverlapAlg):
+    """The config/meta info dataclass for the greedy overlap algorithm"""
+
+    @property
+    def type(self) -> OverlapAlgType:
+        return OverlapAlgType.GREEDY
+
+    @property
+    def is_optimal(self) -> bool:
+        """Whether the overlap algorithm is optimal"""
+        return False
+
+
+@dataclass(frozen=True)
+class OverlapConfig:
+    """The config dataclass for multi-stage overlapping"""
+
+    enable: bool = True  # if False, turn off the multi-stage overlapping mode
+
+    mode: AttnOverlapMode = AttnOverlapMode.STATIC
+
+    degree: int | None = 1
+    dynamic_max_degree: int | None = (
+        8  # only used in dynamic mode, if None, then no limit
+    )
+
+    min_chunk_size: int = 512
+    max_num_chunks: int = 64
+
+    # TODO: use another non-trivial alg as default in the future
+    alg: OverlapAlg = UniformOverlapAlg()
+
+    calc_cost_factor: float = (
+        1.0  # define: calc_cost = calc_cost_factor * calc_area (unit: μs)
+    )
+    comm_cost_factor: float = (
+        1.0  # define: comm_cost = comm_cost_factor * comm_size (unit: μs)
+    )
+
+    def __post_init__(self):
+        if not self.enable:
+            # HACK: force auto-set other attrs to disable mso
+            object.__setattr__(self, "mode", AttnOverlapMode.STATIC)
+            object.__setattr__(self, "degree", 1)
+            object.__setattr__(self, "max_num_chunks", 1)
+
+        if self.mode is AttnOverlapMode.STATIC:
+            assert self.degree is not None, (
+                "When using static overlap mode, "
+                f"the {self.degree=} should be set explicitly."
+            )
+            assert (
+                self.degree <= self.max_num_chunks
+            ), f"The {self.max_num_chunks=} should be no less than {self.degree=}."
+        elif self.mode is AttnOverlapMode.DYNAMIC:
+            assert self.degree is None, (
+                "When using dynamic overlap mode, "
+                f"the {self.degree=} should not be set."
+            )
+            assert self.dynamic_max_degree is None or (
+                self.dynamic_max_degree > 0
+            ), f"The {self.dynamic_max_degree=} should be greater than 0 if specified."
+
+        assert (
+            self.min_chunk_size > 0
+        ), f"The {self.min_chunk_size=} should be greater than 0."
+        assert (
+            self.max_num_chunks > 0
+        ), f"The {self.max_num_chunks=} should be greater than 0."
+        assert (
+            self.calc_cost_factor > 0.0 and self.comm_cost_factor > 0.0
+        ), f"The {self.calc_cost_factor=} and {self.comm_cost_factor=} should be both greater than 0."
 
 
 @dataclass
@@ -25,11 +133,12 @@ class OverlapStageCost:
 @dataclass
 class OverlapSolution:
     """An overlap solution dataclass, made of several info as follows:
-    1. overlap_degree: the number of remote overlap stages
+    1. overlap_degree: the number of remote overlap stages.
     2. partitions: the partitions of the stage costs, a list with length `overlap_degree`,
-        each element of which is a list of stage indices in the stage costs
+        each element of which is a list of stage indices in the `stage_costs`,
+        among them any two elements are mutually exclusive.
         NOTE: we agree that the idx '0' is for host cost pair, and will be always put in the first partition
-    3. overall_cost: the overall timeline cost unitl the last stage done scheduled by this partitions
+    3. overall_cost: the overall timeline cost unitl the last stage done scheduled by this partitions.
     """
 
     overlap_degree: int
@@ -54,18 +163,15 @@ class OverlapSolution:
 class OverlapSolver(nn.Module):
     """The implementation of the algorithms for multi-stage overlapping specified by `alg`."""
 
-    def __init__(
-        self,
-        alg: OverlapAlgorithm = OverlapAlgorithm.GREEDY,
-    ) -> None:
+    def __init__(self, alg: OverlapAlg) -> None:
         super().__init__()
 
         self.alg = alg
 
         self.solve_func = {
-            OverlapAlgorithm.UNIFORM: self._solve_with_uniform,
-            OverlapAlgorithm.GREEDY: self._solve_with_greedy,
-        }[self.alg]
+            OverlapAlgType.UNIFORM: self._solve_with_uniform,
+            OverlapAlgType.GREEDY: self._solve_with_greedy,
+        }[self.alg.type]
 
         # return values
         self.best_solution: OverlapSolution = None  # type: ignore
@@ -76,7 +182,6 @@ class OverlapSolver(nn.Module):
         stage_costs: list[OverlapStageCost],
         overlap_degree: int | None = None,
         dynamic_max_degree: int | None = None,
-        **kwargs,
     ) -> tuple[OverlapSolution, dict[int, OverlapSolution]]:
         """Solve the multi-stage overlapping problem.
 
@@ -85,7 +190,6 @@ class OverlapSolver(nn.Module):
                 which consists of 1 host stage cost and n remote stage costs
             overlap_degree (int | None): the number of remote overlap stages
             dynamic_max_degree: the maximum overlap degree to try if `overlap_degree` is None, i.e. in dynamic mode
-            **kwargs: the additional keyword arguments for the specific algorithm
 
         Returns:
             best_solution (OverlapSolution): the best solution with the minimum overall cost
@@ -107,7 +211,7 @@ class OverlapSolver(nn.Module):
             stage_costs=stage_costs,
             overlap_degree=overlap_degree,
             dynamic_max_degree=dynamic_max_degree,
-            **kwargs,
+            **asdict(self.alg),
         )
 
         assert len(self.solution_dict) > 0, "No solution is found"
@@ -139,8 +243,8 @@ class OverlapSolver(nn.Module):
             2. otherwise, partitions might be: [[0,1,2],[3,4,5], ...]
         """
 
-        random_costs = kwargs.get("random_costs", False)
-        random_seed = kwargs.get("random_seed", None)
+        random_costs = kwargs["random_costs"]
+        random_seed = kwargs["random_seed"]
 
         def _solve_with_static_overlap_degree(overlap_degree: int) -> OverlapSolution:
             partitions: list[list[int]] = []

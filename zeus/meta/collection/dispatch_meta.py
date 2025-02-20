@@ -1,7 +1,5 @@
 from dataclasses import dataclass
 
-import torch.distributed as dist
-
 from zeus.common.enum import AttnMaskType, AttnRole, AttnType
 from zeus.common.ranges import AttnRanges
 from zeus.meta.container.bucket import AttnBucket
@@ -25,8 +23,6 @@ class DispatchMeta:
 
     cp_rank: int
     cp_size: int
-    cp_group_nccl: dist.ProcessGroup
-    cp_group_gloo: dist.ProcessGroup
 
     seqlens: list[int]
     seqlens_permed: list[int]

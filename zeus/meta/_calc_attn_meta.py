@@ -1,42 +1,38 @@
 import torch.distributed as dist
 
-from zeus.common.config import OverlapConfig
 from zeus.meta.collection.calc_meta import AttnCalcMeta
 from zeus.meta.collection.comm_meta import CommMeta
 from zeus.meta.collection.dispatch_meta import DispatchMeta
 from zeus.meta.container.bucket import AttnBucket
-
-from .dist_attn_solver import AttnSolver
+from zeus.meta.solver.dist_attn_solver import DistAttnSolver
+from zeus.meta.solver.overlap_solver import OverlapConfig
 
 
 def calc_attn_meta_from_dispatch_meta(
     dispatch_meta_q: DispatchMeta,
     dispatch_meta_k: DispatchMeta,
     bucket_per_rank: list[AttnBucket],
-    cp_group_nccl: dist.ProcessGroup,
-    cp_group_gloo: dist.ProcessGroup,
+    cp_group: dist.ProcessGroup,
     overlap_config: OverlapConfig,
-) -> tuple[CommMeta, AttnCalcMeta]:
+) -> tuple[CommMeta, AttnCalcMeta, DistAttnSolver]:
     """Calculate the communication and calculation meta from the dispatch meta
 
     Args:
         dispatch_meta_q (DispatchMeta): The dispatch meta for query
         dispatch_meta_k (DispatchMeta): The dispatch meta for key
         bucket_per_rank (list[AttnBucket]): The bucket per rank
-        cp_group_nccl (dist.ProcessGroup): The NCCL process group
-        cp_group_gloo (dist.ProcessGroup): The GLOO process group
+        cp_group (dist.ProcessGroup): The NCCL process group
         overlap_config (OverlapConfig): The overlap config, including the overlap mode, overlap degree, overlap chunk size, etc
 
     Returns:
         tuple[CommMeta, AttnCalcMeta]: The communication and calculation meta
     """
 
-    attn_solver = AttnSolver(
+    attn_solver = DistAttnSolver(
         bucket_per_rank=bucket_per_rank,
         dispatch_meta_q=dispatch_meta_q,
         dispatch_meta_k=dispatch_meta_k,
-        cp_group_nccl=cp_group_nccl,
-        cp_group_gloo=cp_group_gloo,
+        cp_group=cp_group,
         overlap_config=overlap_config,
     )
 
@@ -54,4 +50,4 @@ def calc_attn_meta_from_dispatch_meta(
     # write_rank(repr(comm_meta), "comm_meta.log")
     # write_rank(repr(calc_meta), "calc_meta.log")
 
-    return comm_meta, calc_meta
+    return comm_meta, calc_meta, attn_solver

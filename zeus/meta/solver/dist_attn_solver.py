@@ -6,7 +6,6 @@ import torch
 import torch.distributed as dist
 
 import zeus
-from zeus.common.config import OverlapConfig
 from zeus.common.enum import AttnMaskType, AttnOverlapMode
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
@@ -18,7 +17,7 @@ from zeus.meta.container.chunk import AttnChunk
 from zeus.meta.container.slice import AttnSlice, MultiKAttnSlice
 from zeus.utils import nvtx, transpose_matrix
 
-from .overlap_solver import OverlapSolver, OverlapStageCost
+from .overlap_solver import OverlapConfig, OverlapSolver, OverlapStageCost
 
 
 class AttnRangeWithRank(AttnRange):
@@ -277,9 +276,9 @@ class TransferTable:
         )
 
 
-# TODO: add specific unitest for attn solver
-class AttnSolver:
-    """The attn solver class to process dispatch meta for calc meta and comm meta"""
+# TODO: add specific unitest for dist-attn solver
+class DistAttnSolver:
+    """The dist-attn solver class to process dispatch meta for calc/comm meta"""
 
     @nvtx.instrument_nvtx
     def __init__(
@@ -287,18 +286,15 @@ class AttnSolver:
         bucket_per_rank: list[AttnBucket],
         dispatch_meta_q: DispatchMeta,
         dispatch_meta_k: DispatchMeta,
-        cp_group_nccl: dist.ProcessGroup,
-        cp_group_gloo: dist.ProcessGroup,
+        cp_group: dist.ProcessGroup,
         overlap_config: OverlapConfig,
     ):
-        assert dist.get_backend(cp_group_nccl) == dist.Backend.NCCL
-        assert dist.get_backend(cp_group_gloo) == dist.Backend.GLOO
+        assert dist.get_backend(cp_group) == dist.Backend.NCCL
 
-        self.cp_rank = dist.get_rank(cp_group_nccl)
-        self.cp_size = dist.get_world_size(cp_group_nccl)
+        self.cp_rank = dist.get_rank(cp_group)
+        self.cp_size = dist.get_world_size(cp_group)
 
-        self.cp_group_nccl = cp_group_nccl
-        self.cp_group_gloo = cp_group_gloo
+        self.cp_group = cp_group
 
         self.overlap_config = overlap_config
         self.overlap_solver = OverlapSolver(alg=self.overlap_config.alg)
@@ -723,7 +719,7 @@ class AttnSolver:
             dist.all_gather_object(
                 remote_rank_entry_per_stage_per_rank,
                 remote_rank_entry_per_stage_this_rank,
-                group=self.cp_group_nccl,
+                group=self.cp_group,
             )
 
         # check shape to be [cp_size, overlap_degree]
@@ -825,7 +821,6 @@ class AttnSolver:
             stage_costs=chunk_costs,
             overlap_degree=self.overlap_config.degree,
             dynamic_max_degree=self.overlap_config.dynamic_max_degree,
-            **self.overlap_config.alg_kwargs,
         )
 
         # get the cost partitions of 1 host cost pair and n remote cost pairs
@@ -859,7 +854,7 @@ class AttnSolver:
                 dist.all_reduce(
                     overlap_degree_reduce_tensor,
                     op=dist.ReduceOp.MAX,
-                    group=self.cp_group_nccl,
+                    group=self.cp_group,
                 )
                 final_overlap_degree = overlap_degree_reduce_tensor.item()
 
@@ -1225,7 +1220,7 @@ class AttnSolver:
             dist.all_gather_object(
                 transfer_info_per_stage_per_rank,
                 transfer_info_per_stage_this_rank,
-                group=self.cp_group_nccl,
+                group=self.cp_group,
             )
 
         # check shape to be [cp_size, overlap_degree]

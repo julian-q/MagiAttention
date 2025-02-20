@@ -7,11 +7,10 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.common.config import DistFlashAttnConfig, OverlapConfig
-from zeus.common.enum import AttnOverlapMode
-from zeus.functional.dist_attn import DistFlashAttn, DistFlashAttnRuntime
+from zeus.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
 from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
 from zeus.meta.collection.comm_meta import CommMeta, GroupCastCollectiveArg
+from zeus.testing import parameterize
 from zeus.testing.dist_common import DistTestBase, with_comms
 
 
@@ -44,26 +43,15 @@ class TestDistFlashAttn(DistTestBase):
 
     @skip_if_lt_x_gpu(4)
     @with_comms
-    def test_full_attn(self):
+    @parameterize(
+        "dtype",
+        [
+            torch.float16,
+            torch.bfloat16,
+        ],
+    )
+    def test_full_attn(self, dtype):
         device = torch.cuda.current_device()
-
-        # NOTE: this test does not include overlap solver
-        # so this overlap config is a dummy one
-        # in which only overlap_degree is used
-        overlap_config = OverlapConfig(
-            mode=AttnOverlapMode.STATIC,
-            degree=1,  # TODO: test overlap degree > 1
-            max_num_chunks=1,
-        )
-
-        attn_config = DistFlashAttnConfig(
-            num_heads=1,
-            head_dim=128,
-            dtype=torch.bfloat16,
-            overlap_config=overlap_config,
-            deterministic=False,
-        )
-        dist_attn = DistFlashAttn(attn_config)
 
         attn_calc_meta = AttnCalcMeta(
             local_attn_arg=AttnArg(
@@ -105,19 +93,20 @@ class TestDistFlashAttn(DistTestBase):
             calc_meta=attn_calc_meta,
             cp_group_kv=self.nccl_groups[0],
             cp_group_dkv=self.nccl_groups[1],
+            deterministic=False,
         )
 
         local_q = torch.randn(
-            128, 1, 128, device=device, dtype=attn_config.dtype, requires_grad=True
+            128, 1, 128, device=device, dtype=dtype, requires_grad=True
         )
         local_k = torch.randn(
-            128, 1, 128, device=device, dtype=attn_config.dtype, requires_grad=True
+            128, 1, 128, device=device, dtype=dtype, requires_grad=True
         )
         local_v = torch.randn(
-            128, 1, 128, device=device, dtype=attn_config.dtype, requires_grad=True
+            128, 1, 128, device=device, dtype=dtype, requires_grad=True
         )
 
-        local_out = dist_attn(local_q, local_k, local_v, dist_attn_runtime)
+        local_out, _ = dist_attn_func(local_q, local_k, local_v, dist_attn_runtime)
         total_out = torch.cat(all_gather(local_out, group=self.nccl_group), dim=0)
 
         grad_total_out = torch.randn_like(total_out)

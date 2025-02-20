@@ -8,18 +8,19 @@ from torch.testing._internal.common_utils import run_tests
 
 import zeus
 import zeus.testing
+from zeus import init_dist_attn_runtime_mgr
 from zeus.comm.primitive import group_cast_collective, group_reduce_collective
-from zeus.common.config import DistFlashAttnConfig, OverlapConfig
-from zeus.common.enum import AttnMaskType, AttnOverlapMode, OverlapAlgorithm
+from zeus.common.enum import AttnMaskType, AttnOverlapMode
 from zeus.common.ranges import AttnRanges
-from zeus.functional.dispatch import dispatch_func, undispatch_func
-from zeus.functional.dist_attn import DistFlashAttn, DistFlashAttnRuntime
-from zeus.meta.collection import CommMeta, DispatchMeta
-from zeus.meta.container import AttnBucket
-from zeus.meta.solver import (
-    calc_attn_meta_from_dispatch_meta,
-    calc_dispatch_meta_from_qk_ranges,
+from zeus.config import (
+    DispatchConfig,
+    DistAttnConfig,
+    MinHeapDispatchAlg,
+    OverlapConfig,
+    UniformOverlapAlg,
 )
+from zeus.dist_attn_runtime_mgr import DistAttnRuntimeMgr
+from zeus.meta.collection import CommMeta
 from zeus.testing import parameterize
 from zeus.testing.dist_common import DistTestBase, with_comms
 from zeus.testing.precision import (
@@ -322,8 +323,7 @@ class TestPipeline(DistTestBase):
                 "mode": AttnOverlapMode.STATIC,
                 "degree": 1,
                 "max_num_chunks": 1,
-                "alg": OverlapAlgorithm.UNIFORM,
-                "alg_kwargs": dict(
+                "alg": UniformOverlapAlg(
                     random_costs=False,
                     random_seed=42,
                 ),
@@ -338,8 +338,7 @@ class TestPipeline(DistTestBase):
                 "degree": 1,
                 "min_chunk_size": 1023,
                 "max_num_chunks": 64,
-                "alg": OverlapAlgorithm.UNIFORM,
-                "alg_kwargs": dict(
+                "alg": UniformOverlapAlg(
                     random_costs=True,
                     random_seed=42,
                 ),
@@ -354,8 +353,7 @@ class TestPipeline(DistTestBase):
                 "degree": 2,
                 "min_chunk_size": 513,
                 "max_num_chunks": 64,
-                "alg": OverlapAlgorithm.UNIFORM,
-                "alg_kwargs": dict(
+                "alg": UniformOverlapAlg(
                     random_costs=True,
                     random_seed=42,
                 ),
@@ -370,8 +368,7 @@ class TestPipeline(DistTestBase):
                 "degree": 4,
                 "min_chunk_size": 253,
                 "max_num_chunks": 64,
-                "alg": OverlapAlgorithm.UNIFORM,
-                "alg_kwargs": dict(
+                "alg": UniformOverlapAlg(
                     random_costs=True,
                     random_seed=42,
                 ),
@@ -387,8 +384,7 @@ class TestPipeline(DistTestBase):
                 "dynamic_max_degree": None,
                 "min_chunk_size": 256,
                 "max_num_chunks": 64,
-                "alg": OverlapAlgorithm.UNIFORM,
-                "alg_kwargs": dict(
+                "alg": UniformOverlapAlg(
                     random_costs=True,
                     random_seed=42,
                 ),
@@ -405,8 +401,7 @@ class TestPipeline(DistTestBase):
                 "degree": 4,
                 "min_chunk_size": 512,
                 "max_num_chunks": 64,
-                "alg": OverlapAlgorithm.UNIFORM,
-                "alg_kwargs": dict(
+                "alg": UniformOverlapAlg(
                     random_costs=True,
                     random_seed=42,
                 ),
@@ -424,8 +419,7 @@ class TestPipeline(DistTestBase):
             #     "dynamic_max_degree": 8,
             #     "min_chunk_size": 512,
             #     "max_num_chunks": 64,
-            #     "alg": OverlapAlgorithm.UNIFORM,
-            #     "alg_kwargs": dict(
+            #     "alg": UniformOverlapAlg(
             #         random_costs=True,
             #         random_seed=42,
             #     ),
@@ -433,6 +427,14 @@ class TestPipeline(DistTestBase):
             #     "comm_cost_factor": INTRA_NODE_COMM_COST_FACTOR,
             # },
         ],
+    )
+    @parameterize(
+        "num_heads",
+        [NUM_HEADS],
+    )
+    @parameterize(
+        "head_dim",
+        [HEAD_DIM],
     )
     @parameterize(
         "dtype",
@@ -445,6 +447,8 @@ class TestPipeline(DistTestBase):
         self,
         attn_config: dict[str, Any],
         overlap_config: dict[str, Any],
+        num_heads: int,
+        head_dim: int,
         dtype: torch.dtype,
     ):
         # HACK: (optional) set the same torch manual random seed for each test case
@@ -488,16 +492,46 @@ class TestPipeline(DistTestBase):
 
         device = torch.cuda.current_device()
 
-        overlap_config = OverlapConfig(
-            **{k: v for k, v in overlap_config.items() if k not in (NAME, PROFILE_ONLY)}
-        )  # type: ignore
-
-        dist_attn_config = DistFlashAttnConfig(
-            num_heads=1,
-            head_dim=128,
-            dtype=dtype,
+        dist_attn_config_w_mso = DistAttnConfig(
+            dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
+            overlap_config=OverlapConfig(
+                **{k: v for k, v in overlap_config.items() if k not in (NAME, PROFILE_ONLY)}  # type: ignore
+            ),
             deterministic=False,
-            overlap_config=overlap_config,  # type: ignore
+        )
+
+        dist_attn_config_wo_mso = DistAttnConfig(
+            dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
+            overlap_config=OverlapConfig(enable=False),
+            deterministic=False,
+        )
+
+        dist_attn_runtime_mgr_w_mso = init_dist_attn_runtime_mgr(
+            q_ranges=q_ranges,
+            k_ranges=k_ranges,
+            attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
+            total_seqlen_q=total_seqlen_q,
+            total_seqlen_k=total_seqlen_k,
+            chunk_size=chunk_size,
+            cp_group=self.nccl_group,
+            is_same_source=True,
+            is_q_permutable=True,
+            is_k_permutable=True,
+            dist_attn_config=dist_attn_config_w_mso,
+        )
+
+        dist_attn_runtime_mgr_wo_mso = init_dist_attn_runtime_mgr(
+            q_ranges=q_ranges,
+            k_ranges=k_ranges,
+            attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
+            total_seqlen_q=total_seqlen_q,
+            total_seqlen_k=total_seqlen_k,
+            chunk_size=chunk_size,
+            cp_group=self.nccl_group,
+            is_same_source=True,
+            is_q_permutable=True,
+            is_k_permutable=True,
+            dist_attn_config=dist_attn_config_wo_mso,
         )
 
         # -----    run pipeline test   ---- #
@@ -516,77 +550,30 @@ class TestPipeline(DistTestBase):
             dist.barrier()
             torch.cuda.synchronize()
 
-            # -----   calc dispatch meta   ---- #
-
-            meta_q, meta_k, buckets_per_rank = calc_dispatch_meta_from_qk_ranges(
-                q_ranges=q_ranges,
-                k_ranges=k_ranges,
-                attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
-                total_seqlen_q=total_seqlen_q,
-                total_seqlen_k=total_seqlen_k,
-                chunk_size=chunk_size,
-                cp_size=self.world_size,
-                cp_rank=self.rank,
-                cp_group_nccl=self.nccl_group,
-                cp_group_gloo=self.gloo_group,
-                is_same_source=True,
-                is_q_permutable=True,
-                is_k_permutable=True,
-            )
-
-            # -----   calc comm/calc attn meta   ---- #
-
-            comm_meta, calc_meta = calc_attn_meta_from_dispatch_meta(
-                dispatch_meta_q=meta_q,
-                dispatch_meta_k=meta_k,
-                bucket_per_rank=buckets_per_rank,
-                cp_group_nccl=self.nccl_group,
-                cp_group_gloo=self.gloo_group,
-                overlap_config=dist_attn_config.overlap_config,
-            )
-
-            # -----   sanity check about group cast/reduce   ---- #
-
-            if not profile_mode:
-                self.check_group_cast_and_group_reduce(
-                    comm_meta=comm_meta,
-                    device=device,
-                )
-
-            # -----   init dist attn   ---- #
-
-            dist_attn_runtime = DistFlashAttnRuntime(
-                comm_meta=comm_meta,
-                calc_meta=calc_meta,
-                cp_group_kv=self.nccl_groups[0],
-                cp_group_dkv=self.nccl_groups[1],
-            )
-            dist_attn = DistFlashAttn(dist_attn_config)
-
             # -----   init global qkv   ---- #
 
             total_q = torch.randn(
                 total_seqlen_q,
-                dist_attn_config.num_heads,
-                dist_attn_config.head_dim,
+                num_heads,
+                head_dim,
                 device=device,
-                dtype=dist_attn_config.dtype,
+                dtype=dtype,
                 requires_grad=True,
             )
             total_k = torch.randn(
                 total_seqlen_k,
-                dist_attn_config.num_heads,
-                dist_attn_config.head_dim,
+                num_heads,
+                head_dim,
                 device=device,
-                dtype=dist_attn_config.dtype,
+                dtype=dtype,
                 requires_grad=True,
             )
             total_v = torch.randn(
                 total_seqlen_k,
-                dist_attn_config.num_heads,
-                dist_attn_config.head_dim,
+                num_heads,
+                head_dim,
                 device=device,
-                dtype=dist_attn_config.dtype,
+                dtype=dtype,
                 requires_grad=True,
             )
             dist.all_reduce(total_q.data, group=self.nccl_group)
@@ -595,28 +582,19 @@ class TestPipeline(DistTestBase):
 
             # -----   dispatch global qkv to local qkv   ---- #
 
-            local_q, local_k, local_v = [
-                dispatch_func(
-                    x_global=x_global,
-                    meta=x_meta,
-                    seq_dim=0,
-                )
-                for x_global, x_meta in zip(
-                    (total_q, total_k, total_v), (meta_q, meta_k, meta_k)
-                )
-            ]
+            local_q = dist_attn_runtime_mgr_w_mso.dispatch_qo(total_q)
+            local_k = dist_attn_runtime_mgr_w_mso.dispatch_kv(total_k)
+            local_v = dist_attn_runtime_mgr_w_mso.dispatch_kv(total_v)
 
             # -----   run dist attn forward on local qkv for local o   ---- #
 
-            local_out = dist_attn(local_q, local_k, local_v, dist_attn_runtime)
+            local_out, _ = dist_attn_runtime_mgr_w_mso.calc_attn(
+                local_q, local_k, local_v
+            )
 
             # -----   undispatch local o to global o   ---- #
 
-            total_out = undispatch_func(
-                x_local=local_out,
-                meta=meta_q,
-                seq_dim=0,
-            )
+            total_out = dist_attn_runtime_mgr_w_mso.undispatch_qo(local_out)
 
             # -----   run backward   ---- #
 
@@ -635,13 +613,7 @@ class TestPipeline(DistTestBase):
                 # -----   assert close to the one w/o mso   ---- #
 
                 self.assert_close_to_ref_wo_mso(
-                    dist_attn_config=dist_attn_config,
-                    meta_q=meta_q,
-                    meta_k=meta_k,
-                    buckets_per_rank=buckets_per_rank,
-                    cp_group_nccl=self.nccl_group,
-                    cp_group_gloo=self.gloo_group,
-                    device=device,
+                    dist_attn_runtime_mgr_wo_mso=dist_attn_runtime_mgr_wo_mso,
                     total_q=total_q,
                     total_k=total_k,
                     total_v=total_v,
@@ -676,13 +648,7 @@ class TestPipeline(DistTestBase):
 
     def assert_close_to_ref_wo_mso(
         self,
-        dist_attn_config: DistFlashAttnConfig,
-        meta_q: DispatchMeta,
-        meta_k: DispatchMeta,
-        buckets_per_rank: list[AttnBucket],
-        cp_group_nccl: dist.ProcessGroup,
-        cp_group_gloo: dist.ProcessGroup,
-        device: torch.device,
+        dist_attn_runtime_mgr_wo_mso: DistAttnRuntimeMgr,
         total_q: torch.Tensor,
         total_k: torch.Tensor,
         total_v: torch.Tensor,
@@ -712,45 +678,6 @@ class TestPipeline(DistTestBase):
         dv_rtol = {torch.bfloat16: 0.015, torch.float16: 0.005}.get(dtype, 0.005)
         dv_thres = {torch.bfloat16: 0.02, torch.float16: 0.01}.get(dtype, 0.01)
 
-        # -----   replace the overlap config w/o mso   ---- #
-
-        overlap_config_wo_mso = OverlapConfig(enable=False)
-        dist_attn_config_wo_mso = DistFlashAttnConfig(
-            num_heads=dist_attn_config.num_heads,
-            head_dim=dist_attn_config.head_dim,
-            dtype=dist_attn_config.dtype,
-            deterministic=dist_attn_config.deterministic,
-            overlap_config=overlap_config_wo_mso,
-        )
-
-        # -----   calc comm/calc attn meta for the ref w/o mso   ---- #
-
-        comm_meta, calc_meta = calc_attn_meta_from_dispatch_meta(
-            dispatch_meta_q=meta_q,
-            dispatch_meta_k=meta_k,
-            bucket_per_rank=buckets_per_rank,
-            cp_group_nccl=cp_group_nccl,
-            cp_group_gloo=cp_group_gloo,
-            overlap_config=dist_attn_config_wo_mso.overlap_config,
-        )
-
-        # -----   sanity check about group cast/reduce for the ref w/o mso   ---- #
-
-        self.check_group_cast_and_group_reduce(
-            comm_meta=comm_meta,
-            device=device,
-        )
-
-        # -----   init dist attn for the ref w/o mso  ---- #
-
-        dist_attn_runtime = DistFlashAttnRuntime(
-            comm_meta=comm_meta,
-            calc_meta=calc_meta,
-            cp_group_kv=cp_group_nccl,
-            cp_group_dkv=cp_group_nccl,  # use the same group as kv to make sure "safe"
-        )
-        dist_attn = DistFlashAttn(dist_attn_config_wo_mso)
-
         # -----   init global qkv by copying   ---- #
 
         total_q_ref = total_q.detach().clone().requires_grad_(True)
@@ -759,30 +686,19 @@ class TestPipeline(DistTestBase):
 
         # -----   dispatch global qkv to local qkv   ---- #
 
-        local_q_ref, local_k_ref, local_v_ref = [
-            dispatch_func(
-                x_global=x_global,
-                meta=x_meta,
-                seq_dim=0,
-            )
-            for x_global, x_meta in zip(
-                (total_q_ref, total_k_ref, total_v_ref), (meta_q, meta_k, meta_k)
-            )
-        ]
+        local_q_ref = dist_attn_runtime_mgr_wo_mso.dispatch_qo(total_q_ref)
+        local_k_ref = dist_attn_runtime_mgr_wo_mso.dispatch_kv(total_k_ref)
+        local_v_ref = dist_attn_runtime_mgr_wo_mso.dispatch_kv(total_v_ref)
 
         # -----   run dist attn forward on local qkv for local o for the ref w/o mso   ---- #
 
-        local_out_ref = dist_attn(
-            local_q_ref, local_k_ref, local_v_ref, dist_attn_runtime
+        local_out_ref, _ = dist_attn_runtime_mgr_wo_mso.calc_attn(
+            local_q_ref, local_k_ref, local_v_ref
         )
 
         # -----   undispatch local o to global o for the ref w/o mso   ---- #
 
-        total_out_ref = undispatch_func(
-            x_local=local_out_ref,
-            meta=meta_q,
-            seq_dim=0,
-        )
+        total_out_ref = dist_attn_runtime_mgr_wo_mso.undispatch_qo(local_out_ref)
 
         # -----   run backward for the ref w/o mso   ---- #
 

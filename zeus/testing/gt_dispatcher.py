@@ -2,11 +2,12 @@ from typing import List
 
 import torch.nn as nn
 
-from zeus.common.enum import AttnMaskType, DispatchAlgorithm
+from zeus.common.enum import AttnMaskType
 from zeus.common.mask import AttnMask
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
 from zeus.meta.container import AttnBucket, AttnChunk, AttnSlice
+from zeus.meta.solver.dispatch_solver import DispatchAlg
 
 
 class GroundTruthDispatcher(nn.Module):
@@ -23,10 +24,11 @@ class GroundTruthDispatcher(nn.Module):
 
     def __init__(
         self,
-        alg: DispatchAlgorithm = DispatchAlgorithm.MIN_HEAP,
-        **alg_kwargs,
+        alg: DispatchAlg,
     ) -> None:
         super().__init__()
+
+        self.alg = alg
 
         self._self_attn_mask: AttnMask = None  # type: ignore
         self._cross_attn_mask: AttnMask = None  # type: ignore

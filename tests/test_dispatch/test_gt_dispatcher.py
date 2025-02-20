@@ -4,6 +4,7 @@ from unittest import TestCase
 from zeus.common.enum import AttnMaskType
 from zeus.common.mask import AttnMask
 from zeus.common.ranges import AttnRanges
+from zeus.config import MinHeapDispatchAlg
 from zeus.testing.gt_dispatcher import GroundTruthDispatcher
 
 
@@ -50,7 +51,7 @@ class TestGroundTruthDispatcher(TestCase):
 
         # --------------      init gt dispatcher       -------------- #
 
-        gt_dispatcher = GroundTruthDispatcher()
+        gt_dispatcher = GroundTruthDispatcher(alg=MinHeapDispatchAlg())
         global_bucket = gt_dispatcher._compute_self_attn_areas(
             q_ranges=q_ranges,
             k_ranges=k_ranges,

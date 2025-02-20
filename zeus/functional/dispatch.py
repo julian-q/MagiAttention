@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 
 from zeus.comm.functional import all_gather_fwd_scatter_bwd, scatter_fwd_all_gather_bwd
 from zeus.common.enum import AttnType
@@ -9,6 +10,7 @@ from zeus.utils import nvtx
 @nvtx.instrument_nvtx
 def dispatch_func(
     x_global: torch.Tensor,
+    group: dist.ProcessGroup,
     meta: DispatchMeta,
     seq_dim: int = 0,
 ) -> torch.Tensor:
@@ -17,6 +19,7 @@ def dispatch_func(
 
     Args:
         x_global (torch.Tensor): the global tensor to be dispatched
+        group (dist.ProcessGroup): the process group to be used for communication
         meta (DispatchMeta): the meta info of the dispatch
         seq_dim (int): the sequence dimension of the tensor
 
@@ -46,7 +49,7 @@ def dispatch_func(
         [x_chunked[i] for i in meta.partitions_perm_idxs],
         dim=seq_dim,
     )
-    x_local = scatter_fwd_all_gather_bwd(x_perm, group=meta.cp_group_nccl, dim=0)
+    x_local = scatter_fwd_all_gather_bwd(x_perm, group=group, dim=0)
 
     return x_local
 
@@ -55,6 +58,7 @@ def dispatch_func(
 def undispatch_func(
     x_local: torch.Tensor,
     meta: DispatchMeta,
+    group: dist.ProcessGroup,
     seq_dim: int = 0,
 ) -> torch.Tensor:
     """Undispatch the local tensor 'x_local' along its sequence dim following the meta info,
@@ -62,6 +66,7 @@ def undispatch_func(
 
     Args:
         x_local (torch.Tensor): the local tensor to be undispatched
+        group (dist.ProcessGroup): the process group to be used for communication
         meta (DispatchMeta): the meta info of the undispatch
         seq_dim (int): the sequence dimension of the tensor
 
@@ -71,19 +76,13 @@ def undispatch_func(
 
     # --------------      pre-check args       -------------- #
 
-    ag_group = meta.cp_group_nccl
-    if ag_group is None:
-        raise ValueError(
-            "The nccl process group to all-gather the dispatched tensors is not given in meta."
-        )
-
     assert (
         meta.attn_type is AttnType.SELF_ATTN
     ), f"We only support self-attention now, but got attn_type={meta.attn_type}"
 
     # --------------      all-gather-v       -------------- #
 
-    x_gather = all_gather_fwd_scatter_bwd(x_local, group=ag_group, dim=0)
+    x_gather = all_gather_fwd_scatter_bwd(x_local, group=group, dim=0)
 
     # --------------      undispatch       -------------- #
 
