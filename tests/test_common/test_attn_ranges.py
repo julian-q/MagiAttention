@@ -223,7 +223,27 @@ class TestAttnRanges(TestCase):
         self.assertEqual(merged_ranges, AttnRanges.from_ranges([(0, 35), (40, 50)]))
         self.assertTrue(merged_ranges.is_merged())
 
+    def test_non_overlap(self):
+        attn_ranges = AttnRanges.from_ranges([(8, 14), (5, 10)])
+        self.assertFalse(attn_ranges.is_non_overlap())
+
+        attn_ranges = AttnRanges.from_ranges([(8, 14), (14, 15)])
+        self.assertTrue(attn_ranges.is_non_overlap())
+
+        attn_ranges = AttnRanges.from_ranges([(8, 14), (3, 7)])
+        self.assertTrue(attn_ranges.is_non_overlap())
+
     def test_chunk(self):
+        # ----    case0: raise assert error when the ranges is overlapped   --- #
+
+        attn_ranges = AttnRanges.from_ranges([(8, 14), (5, 10)])
+
+        with self.assertRaises(
+            AssertionError,
+            msg="attn_ranges should be non-overlapped before chunking",
+        ):
+            attn_ranges.chunk(chunk_size=8)
+
         # ---------    case1: a single range     --------- #
         attn_ranges = AttnRanges.from_ranges([(5, 10)])
 

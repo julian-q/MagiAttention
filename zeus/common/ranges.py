@@ -166,13 +166,14 @@ class AttnRanges:
 
         NOTE: python的sort是稳定的, 因此当start相同时, 会保持原来的顺序
         """
+
         return AttnRanges.from_ranges(
             sorted(self._ranges, key=lambda attn_range: attn_range.start)
         )
 
     @nvtx.instrument_nvtx
     def merge(self) -> "AttnRanges":
-        """Merge the attn_ranges for the overlapped parts
+        """Merge the attn_ranges for the overlapped / tangent parts
         in ascending order by 'attn_range.start'
         """
 
@@ -197,13 +198,16 @@ class AttnRanges:
         return _merged_ranges
 
     @nvtx.instrument_nvtx
-    def chunk(self, chunk_size: int) -> list["AttnRanges"]:
-        _ranges = self.merge()._ranges  # required to be merged first
+    def chunk(self, chunk_size: int, check: bool = True) -> list["AttnRanges"]:
+        if check:  # required to be non-overlap
+            assert (
+                self.is_non_overlap()
+            ), "the ranges should be non-overlap if needed to be chunked"
 
         chunked_ranges_list = []
         chunked_ranges = AttnRanges()
         cnt = 0
-        for attn_range in _ranges:
+        for attn_range in self._ranges:
             seqlen, start = attn_range.seqlen, attn_range.start
             new_cnt = cnt + seqlen
             while new_cnt >= chunk_size:
@@ -242,6 +246,8 @@ class AttnRanges:
         return trunc_ranges
 
     def is_sorted(self) -> bool:
+        """Whether the ranges are sorted by 'attn_range.start' in ascending order"""
+
         if not all(
             self._ranges[i - 1].start <= self._ranges[i].start
             for i in range(1, len(self._ranges))
@@ -250,6 +256,12 @@ class AttnRanges:
         return True
 
     def is_merged(self) -> bool:
+        """Whether the ranges are merged,
+        which means:
+            1. if the ranges are sorted by 'attn_range.start' in ascending order
+            2. if any pair of the ranges have neither overlapped nor tangent parts
+        """
+
         if self.is_sorted():
             if not all(
                 self._ranges[i - 1].end < self._ranges[i].start
@@ -260,6 +272,11 @@ class AttnRanges:
                 return True
         else:
             return False
+
+    def is_non_overlap(self) -> bool:
+        """Whether any pair of the ranges have overlapped parts"""
+
+        return self.total_seqlen == self.merge().total_seqlen
 
     def is_cu_seqlens(self, seqlen: int) -> bool:
         if not self._ranges[0].start == 0:

@@ -505,7 +505,9 @@ class DistAttnSolver:
         # chunk the remote k ranges global for multi-stage overlapping
         remote_k_ranges_global_per_chunk: list[
             AttnRanges
-        ] = remote_k_ranges_global.chunk(self.overlap_chunk_size)
+        ] = remote_k_ranges_global.chunk(
+            self.overlap_chunk_size, check=zeus.is_sanity_check_enable()
+        )
 
         # sanity check
         if zeus.is_sanity_check_enable():
