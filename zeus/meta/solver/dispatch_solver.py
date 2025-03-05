@@ -8,7 +8,7 @@ import torch.nn as nn
 from zeus.common.enum import DispatchAlgType
 
 
-@dataclass
+@dataclass(frozen=True)
 class DispatchAlg(ABC):
     """The abstract config/meta info dataclass for specific dispatch algorithm"""
 
@@ -33,7 +33,7 @@ class DispatchAlg(ABC):
         """Whether the number of workloads of each bucket are equal"""
 
 
-@dataclass
+@dataclass(frozen=True)
 class LBDispatchAlg(DispatchAlg):
     """The config/meta info dataclass for the lower-bound dispatch algorithm"""
 
@@ -57,7 +57,7 @@ class LBDispatchAlg(DispatchAlg):
         return False
 
 
-@dataclass
+@dataclass(frozen=True)
 class DPDispatchAlg(DispatchAlg):
     """The config/meta info dataclass for the dynamic programming dispatch algorithm"""
 
@@ -81,7 +81,7 @@ class DPDispatchAlg(DispatchAlg):
         return False
 
 
-@dataclass
+@dataclass(frozen=True)
 class BSDispatchAlg(DispatchAlg):
     """The config/meta info dataclass for the binary search dispatch algorithm"""
 
@@ -105,7 +105,7 @@ class BSDispatchAlg(DispatchAlg):
         return False
 
 
-@dataclass
+@dataclass(frozen=True)
 class MinHeapDispatchAlg(DispatchAlg):
     """The config/meta info dataclass for the min-heap dispatch algorithm"""
 

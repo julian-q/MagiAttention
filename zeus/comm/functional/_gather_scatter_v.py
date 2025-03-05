@@ -19,7 +19,7 @@ class AllGatherFwdScatterBwd(torch.autograd.Function):
         return all_gather_v(input, group, dim, split_sizes)
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
+    def backward(ctx, grad_output: torch.Tensor):  # pragma: no cover
         group: dist.ProcessGroup = ctx.group
         dim: int = ctx.dim
         split_sizes: list[int] | None = ctx.split_sizes
@@ -44,7 +44,7 @@ class ScatterFwdAllGatherBwd(torch.autograd.Function):
         return scatter_v(input, group, dim, split_sizes)
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
+    def backward(ctx, grad_output: torch.Tensor):  # pragma: no cover
         return (
             all_gather_v(grad_output, ctx.group, ctx.dim, ctx.split_sizes),
             None,

@@ -72,7 +72,7 @@ def parameterize(argument: str, values: list[Any]) -> Callable:
                         error_msg += f" raised the error:\n{e}\n"
                     else:
                         error_msg += f" x {e}"
-                    raise Exception(error_msg) from e
+                    raise type(e)(error_msg) from e
 
         return _parameterized_func
 

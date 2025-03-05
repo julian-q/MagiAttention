@@ -1,4 +1,3 @@
 [submodule "third_party/flexible-flash-attention"]
 	path = third_party/flexible-flash-attention
-	url = https://github.com/littsk/flexible-flash-attention.git
-	branch = ffa-impl
+	url = https://github.com/world-sim-dev/flex-flash-attention.git

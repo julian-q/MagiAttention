@@ -14,29 +14,35 @@
 * docker run command:
 
     ```bash
-    docker run --name zeus_dev_{your_name} -v {host_mnt_root}:{container_mnt_root} -it -d --privileged --gpus all --network host --ipc host --ulimit memlock=-1 --ulimit stack=67108864 nvcr.io/nvidia/pytorch:24.04-py3 /bin/bash
+    docker run --name {contaier_name} -v {host_mnt_root}:{container_mnt_root} -it -d --privileged --gpus all --network host --ipc host --ulimit memlock=-1 --ulimit stack=67108864 nvcr.io/nvidia/pytorch:24.04-py3 /bin/bash
     ```
 
 * docker exec command:
 
     ```bash
-    docker exec -it zeus_dev_{your_name} /bin/bash
+    docker exec -it {contaier_name} /bin/bash
     ```
 
 
-### Step2: install ffa with other submodules
+### Step2: install zeus with other submodules
 
 * command:
 
     ```bash
-    # clone submodules including ffa
+    # 1-1. install zeus for developer
+    pip install -e .
+
+    # 1-2. or, install zeus for user
+    make refresh
+
+    # 2. clone submodules including ffa
     git submodule update --init --recursive
 
-    # get into ffa folder
+    # 3-1. get into ffa folder
     cd third_party/flexible-flash-attention/hopper
 
-    # install ffa
-    python setup.py install
+    # 3-2. install ffa
+    python setup.py install; cd -
     ```
 
 ### Step3: install other required packages
@@ -48,7 +54,7 @@
     pip install -r requirements.txt
     ```
 
-### Step4: setup pre-commit (for developer only)
+### Step4: setup pre-commit (for developer)
 
 * pre-commit:
     ```bash

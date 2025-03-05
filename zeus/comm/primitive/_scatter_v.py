@@ -1,6 +1,8 @@
 import torch
 import torch.distributed as dist
 
+__all__ = ["scatter_v"]
+
 
 def scatter_v(
     input: torch.Tensor,

@@ -7,7 +7,7 @@ import torch.nn as nn
 from zeus.common.enum import AttnOverlapMode, OverlapAlgType
 
 
-@dataclass
+@dataclass(frozen=True)
 class OverlapAlg(ABC):
     """The abstract config/meta info dataclass for specific overlap algorithm"""
 
@@ -22,7 +22,7 @@ class OverlapAlg(ABC):
         """Whether the overlap algorithm is optimal"""
 
 
-@dataclass
+@dataclass(frozen=True)
 class UniformOverlapAlg(OverlapAlg):
     """The config/meta info dataclass for the uniform overlap algorithm"""
 
@@ -39,7 +39,7 @@ class UniformOverlapAlg(OverlapAlg):
         return False
 
 
-@dataclass
+@dataclass(frozen=True)
 class GreedyOverlapAlg(OverlapAlg):
     """The config/meta info dataclass for the greedy overlap algorithm"""
 
@@ -260,30 +260,43 @@ class OverlapSolver(nn.Module):
             else:
                 overlap_degree_idle = 0
 
-            #  ------    construct the stage idxs   ------ #
-
-            num_stages_in_one_degree = num_stages // overlap_degree
-            num_stages_remain = num_stages % overlap_degree
-
-            stage_idxs = list(range(1, num_stages))  # [1,2,3,4,5,...,num_stages-1]
-            if random_costs:
-                if random_seed is not None:
-                    random.seed(random_seed)
-                random.shuffle(stage_idxs)  # [4,2,num_stages-2,1,5, ...]
-            # NOTE: agree that: 0 has to be put at first: [0,4,2,num_stages-2,1,5,...]
-            stage_idxs = [0] + stage_idxs
-
             #  ------    partition the stage idxs   ------ #
 
-            start = 0
-            for i in range(overlap_degree):
-                end = (
-                    start
-                    + num_stages_in_one_degree
-                    + (1 if i < num_stages_remain else 0)
-                )
-                partitions.append(stage_idxs[start:end])
-                start = end
+            if overlap_degree == 0:
+                # NOTE: corner case when no remote stage is needed
+                # then all overlap degree is idle, so we just fill the partitions manually
+                partitions = [[] for _ in range(overlap_degree_idle)]
+                partitions[0].append(0)  # host cost idx
+            else:
+                num_stages_in_one_degree = num_stages // overlap_degree
+                num_stages_remain = num_stages % overlap_degree
+
+                stage_idxs = list(range(1, num_stages))  # [1,2,3,4,5,...,num_stages-1]
+                if random_costs:
+                    if random_seed is not None:
+                        random.seed(random_seed)
+                    random.shuffle(stage_idxs)  # [4,2,num_stages-2,1,5, ...]
+                # NOTE: agree that: 0 (host stage cost) has to be put at first: [0,4,2,num_stages-2,1,5,...]
+                stage_idxs = [0] + stage_idxs
+
+                start = 0
+                for i in range(overlap_degree):
+                    end = (
+                        start
+                        + num_stages_in_one_degree
+                        + (1 if i < num_stages_remain else 0)
+                    )
+                    partitions.append(stage_idxs[start:end])
+                    start = end
+
+                #  ------    append the idle degree if needed   ------ #
+
+                for _ in range(overlap_degree_idle):
+                    partitions.append([])
+
+            #  ------    reset the required overlap degree   ------ #
+
+            overlap_degree += overlap_degree_idle
 
             #  ------    calc overall cost   ------ #
 
@@ -292,11 +305,6 @@ class OverlapSolver(nn.Module):
                 partitions=partitions,
                 overlap_degree=overlap_degree,
             )
-
-            #  ------    append the idle overlap degree   ------ #
-
-            for _ in range(overlap_degree_idle):
-                partitions.append([])
 
             #  ------    construct the solution   ------ #
 
@@ -311,8 +319,7 @@ class OverlapSolver(nn.Module):
         num_stages = len(stage_costs)
 
         if overlap_degree is None:
-            dynamic_max_degree = dynamic_max_degree or num_stages - 1
-
+            dynamic_max_degree = dynamic_max_degree or num_stages
             for overlap_degree in range(1, dynamic_max_degree + 1):
                 solution = _solve_with_static_overlap_degree(overlap_degree)
                 self.solution_dict[overlap_degree] = solution
@@ -375,6 +382,7 @@ class OverlapSolver(nn.Module):
                         if idx != 0
                     ),
                 )
+
         # last remote calc cost
         overall_cost += sum(
             stage_costs[idx].calc_cost for idx in partitions[-1] if idx != 0

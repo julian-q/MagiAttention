@@ -9,6 +9,7 @@ from flash_attn_interface import _flex_flash_attn_backward, _flex_flash_attn_for
 
 from zeus.comm.primitive import group_cast_collective, group_reduce_collective
 from zeus.comm.work import WorkWithPostProcessFn
+from zeus.common.ranges import NaiveRanges
 from zeus.meta.collection import AttnCalcMeta, CommMeta
 from zeus.utils import nvtx
 
@@ -39,6 +40,7 @@ def safe_subtract(
 
 
 @nvtx.instrument_nvtx
+@torch.compile
 def correct_attn_lse(
     lse1: torch.Tensor,
     lse2: torch.Tensor,
@@ -67,6 +69,7 @@ def correct_attn_lse(
 
 
 @nvtx.instrument_nvtx
+@torch.compile
 def correct_attn_output(
     o1: torch.Tensor,
     lse1: torch.Tensor,
@@ -99,6 +102,7 @@ def correct_attn_output(
     return o.to(o1.dtype)
 
 
+# TODO: fuse this kernel in the future
 @nvtx.instrument_nvtx
 def result_correction(
     out_list: list[torch.Tensor],
@@ -141,6 +145,18 @@ def result_correction(
             )
 
     return curr_out, curr_lse
+
+
+# TODO: put this logic into kernel
+@nvtx.instrument_nvtx
+def out_zero_fill_correction(
+    out: torch.Tensor,
+    out_zero_fill_ranges: NaiveRanges,
+) -> torch.Tensor:
+    for fill_start, fill_end in out_zero_fill_ranges:
+        out[fill_start:fill_end].fill_(0)
+
+    return out
 
 
 class DistFlashAttnRuntime:
@@ -215,13 +231,11 @@ class DistFlashAttnRuntime:
         dtype = local_kv.dtype
         device = local_kv.device
 
-        group_cast_collective_args = self.comm_meta.group_cast_collective_args_list[
-            overlap_stage
-        ]
+        group_collective_args = self.comm_meta.group_collective_args_list[overlap_stage]
 
         remote_kv_buffer = torch.empty(
             [
-                self.comm_meta.num_remote_tokens_per_overlap_stage[overlap_stage] * 2,
+                self.comm_meta.num_remote_tokens_per_stage[overlap_stage] * 2,
                 num_heads,
                 head_dim,
             ],
@@ -229,6 +243,7 @@ class DistFlashAttnRuntime:
             device=device,
         )
 
+        # DE-BUG
         logger.debug(
             f"RANK: {dist.get_rank()}, {remote_kv_buffer.shape=}, {local_kv.shape=}"
         )
@@ -236,11 +251,7 @@ class DistFlashAttnRuntime:
         remote_kv_work = group_cast_collective(
             input=local_kv,
             output=remote_kv_buffer,
-            input_split_size_list=group_cast_collective_args.input_split_size_list * 2,
-            output_split_size_list=group_cast_collective_args.output_split_size_list
-            * 2,
-            dst_indices_list=group_cast_collective_args.dst_indices_list * 2,
-            src_index_list=group_cast_collective_args.src_index_list * 2,
+            **group_collective_args.to_group_cast_args(),
             group=self.cp_group_kv,
             async_op=True,
         )
@@ -281,20 +292,17 @@ class DistFlashAttnRuntime:
         else:
             attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
 
+        # DE-BUG
         logger.debug(
-            f"RANK: {dist.get_rank()}, {q.shape=}, {kv.shape=}, {q.device=}, {kv.device=}"
-        )
-        logger.debug(
-            f"RANK: {dist.get_rank()}, {attn_arg.q_ranges=}, {attn_arg.k_ranges=}, "
-            f"{attn_arg.is_causal_mapping=}, {attn_arg.max_seqlen_q=}, "
-            f"{attn_arg.max_seqlen_k=}, {attn_arg.skip_attn=}"
+            f"RANK: {dist.get_rank()}, {q.shape=}, {kv.shape=}, "
+            f"{q.device=}, {kv.device=}, "
+            f"{attn_arg=}"
         )
 
         # 计算attn
         if attn_arg.skip_attn:
             num_tokens, num_heads, head_dim = q.shape
             out = torch.zeros_like(q)
-            # REVIEW(xiaowu): dtype
             lse = (
                 torch.ones(
                     [num_heads, num_tokens], dtype=torch.float32, device=q.device
@@ -304,7 +312,7 @@ class DistFlashAttnRuntime:
         else:
             k, v = self.chunk_kv(kv)
             with nvtx.add_nvtx_event(
-                f"area={attn_arg.total_area} | qr={attn_arg.q_ranges} | kr={attn_arg.k_ranges}"
+                f"attn-fwd: area={attn_arg.total_area} | qr={attn_arg.q_ranges} | kr={attn_arg.k_ranges}"
             ):
                 out, _, _, _, _, lse = _flex_flash_attn_forward(
                     q=q,
@@ -315,15 +323,9 @@ class DistFlashAttnRuntime:
                     deterministic=deterministic,
                 )
 
-            # TODO(xiaowu): opt performance
             # fill output with zero indexed by "hole" q ranges
-            start, end = 0, q.size(0)
-            for q_range in attn_arg.q_ranges:
-                if q_range[0] > start:
-                    out[start : q_range[0]] = 0
-                start = q_range[1]
-            if end > start:
-                out[start:end] = 0
+            # TODO: put this logic into kernel
+            out_zero_fill_correction(out, attn_arg.out_zero_fill_ranges)
 
         return out, lse
 
@@ -382,17 +384,12 @@ class DistFlashAttnRuntime:
         overlap_stage: int,
     ) -> WorkWithPostProcessFn:
         """reduce remote dkv to add to local dkv for the given overlap stage."""
-        group_cast_collective_args = self.comm_meta.group_cast_collective_args_list[
-            overlap_stage
-        ]
+        group_collective_args = self.comm_meta.group_collective_args_list[overlap_stage]
 
         partial_local_dkv_work = group_reduce_collective(
             input=partial_remote_dkv,
             output=partial_local_dkv,
-            input_split_size_list=group_cast_collective_args.output_split_size_list * 2,
-            output_split_size_list=group_cast_collective_args.input_split_size_list * 2,
-            dst_index_list=group_cast_collective_args.src_index_list * 2,
-            src_indices_list=group_cast_collective_args.dst_indices_list * 2,
+            **group_collective_args.to_group_reduce_args(),
             group=self.cp_group_dkv,
             async_op=True,
         )
@@ -510,11 +507,11 @@ class DistFlashAttnFunc(torch.autograd.Function):
 
         ctx.save_for_backward(local_q, local_kv, out, lse)
         ctx.dist_attn_runtime = dist_attn_runtime
-        # TODO: return lse as fa
+
         return out, lse
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor, *args):
+    def backward(ctx, grad_output: torch.Tensor, *args):  # pragma: no cover
         local_q, local_kv, out, final_lse = ctx.saved_tensors
         dist_attn_runtime: DistFlashAttnRuntime = ctx.dist_attn_runtime
 

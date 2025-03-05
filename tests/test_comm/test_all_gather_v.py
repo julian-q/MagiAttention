@@ -1,0 +1,143 @@
+import torch
+import torch.distributed
+import torch.distributed as dist
+from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
+from torch.testing._internal.common_utils import run_tests
+
+from zeus.comm.primitive import all_gather_v
+from zeus.comm.primitive.utils import _get_dims_as_trans_with_dim0, _trans_with_dim0
+from zeus.testing.dist_common import DistTestBase, with_comms
+
+
+class TestAllgatherV(DistTestBase):
+    @property
+    def process_group(self):
+        return dist.distributed_c10d._get_default_group()
+
+    @property
+    def world_size(self) -> int:
+        return 4
+
+    @skip_if_lt_x_gpu(4)
+    @with_comms
+    def test_all_gather_v(self):
+        b, s, h = 16, 1024, 128
+
+        x = torch.randn((b, s + self.rank, h), device=torch.cuda.current_device())
+        x_ = x.transpose(0, 1).contiguous()  # (s + rank, b, h)
+
+        x_gather_list = [
+            torch.empty((s + rank, b, h), device=x.device, dtype=x.dtype)
+            for rank in range(self.world_size)
+        ]
+
+        dist.all_gather(x_gather_list, x_, group=self.process_group)
+
+        x_gather_v_ref = torch.cat(x_gather_list, dim=0).transpose(0, 1)
+
+        x_gather_v = all_gather_v(
+            x_local=x,
+            group=self.process_group,
+            dim=1,
+            split_sizes=[s + rank for rank in range(self.world_size)],
+        )
+
+        self.assertTrue(torch.equal(x_gather_v_ref, x_gather_v))
+
+    def test_trans_with_dim0(self):
+        # ---------    high-dim tensor     --------- #
+
+        x = torch.arange(2 * 3 * 4).reshape(2, 3, 4).contiguous()
+
+        y0 = _trans_with_dim0(x, dim=0)
+        y0_ = _trans_with_dim0(x, dim=-3)
+        self.assertTrue(y0.is_contiguous())
+        self.assertTrue(torch.equal(y0, x))
+        self.assertTrue(torch.equal(y0_, y0))
+        self.assertTrue(y0.data_ptr() == x.data_ptr())  # same storage
+
+        y1 = _trans_with_dim0(x, dim=1)
+        y1_ = _trans_with_dim0(x, dim=-2)
+        self.assertTrue(y1.is_contiguous())
+        self.assertTrue(torch.equal(y1, x.transpose(0, 1)))
+        self.assertTrue(torch.equal(y1_, y1))
+        self.assertFalse(y1.data_ptr() == x.data_ptr())  # different storage
+
+        y2 = _trans_with_dim0(x, dim=2)
+        y2_ = _trans_with_dim0(x, dim=-1)
+        self.assertTrue(y2.is_contiguous())
+        self.assertTrue(torch.equal(y2, x.transpose(0, 2)))
+        self.assertTrue(torch.equal(y2_, y2))
+        self.assertFalse(y2.data_ptr() == x.data_ptr())  # different storage
+
+        # ---------    1-dim tensor     --------- #
+
+        x = torch.arange(
+            12,
+        )
+
+        y0 = _trans_with_dim0(x, dim=0)
+        self.assertTrue(y0.is_contiguous())
+        self.assertTrue(torch.equal(y0, x))
+        self.assertTrue(y0.data_ptr() == x.data_ptr())  # same storage
+
+        y1 = _trans_with_dim0(x, dim=-1)
+        self.assertTrue(y1.is_contiguous())
+        self.assertTrue(torch.equal(y1, x))
+        self.assertTrue(y1.data_ptr() == x.data_ptr())  # same storage
+
+    def test_get_dims_as_trans_with_dim0(self):
+        # ---------    high-dim shape     --------- #
+
+        x_shape = [2, 3, 4, 5]
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=0)
+        self.assertEqual(this_dim, 2)
+        self.assertEqual(other_dims, [3, 4, 5])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=1)
+        self.assertEqual(this_dim, 3)
+        self.assertEqual(other_dims, [2, 4, 5])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=2)
+        self.assertEqual(this_dim, 4)
+        self.assertEqual(other_dims, [3, 2, 5])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=3)
+        this_dim_, other_dims_ = _get_dims_as_trans_with_dim0(x_shape, dim=-1)
+        self.assertEqual(this_dim, 5)
+        self.assertEqual(other_dims, [3, 4, 2])
+        self.assertEqual(this_dim_, this_dim)
+        self.assertEqual(other_dims_, other_dims)
+
+        # ---------    1-dim shape     --------- #
+
+        x_shape = [12]
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=0)
+        self.assertEqual(this_dim, 12)
+        self.assertEqual(other_dims, [])
+
+        this_dim, other_dims = _get_dims_as_trans_with_dim0(x_shape, dim=-1)
+        self.assertEqual(this_dim, 12)
+        self.assertEqual(other_dims, [])
+
+        # ---------    invalid dim     --------- #
+
+        x_shape = [2, 3, 4]
+
+        with self.assertRaises(
+            AssertionError,
+            msg="dim should be in [0, len(x_shape) - 1) or -1",
+        ):
+            _get_dims_as_trans_with_dim0(x_shape, dim=4)
+
+        with self.assertRaises(
+            AssertionError,
+            msg="dim should be in [0, len(x_shape) - 1) or -1",
+        ):
+            _get_dims_as_trans_with_dim0(x_shape, dim=-2)
+
+
+if __name__ == "__main__":
+    run_tests()

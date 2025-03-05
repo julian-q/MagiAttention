@@ -1,4 +1,5 @@
 import datetime
+import os
 from functools import wraps
 from typing import Any, Callable
 
@@ -17,6 +18,11 @@ NUM_DEVICES = 4
 if torch.cuda.is_available() and torch.cuda.device_count() > 1:
     # when we actually have multiple GPUs, relax the requirement to smaller counts.
     NUM_DEVICES = min(NUM_DEVICES, torch.cuda.device_count())
+
+
+# HACK: enable unitest sanity check if not using profile mode
+if os.environ.get("ZEUS_UNITEST_PROFILE_MODE", "0") != "1":
+    os.environ["ZEUS_SANITY_CHECK"] = "1"
 
 
 # TODO: add process group initialization and property

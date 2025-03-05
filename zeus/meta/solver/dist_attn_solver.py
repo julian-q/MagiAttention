@@ -1,5 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import chain
 from typing import Iterator
 
 import torch
@@ -10,7 +11,7 @@ from zeus.common.enum import AttnMaskType, AttnOverlapMode
 from zeus.common.range import AttnRange
 from zeus.common.ranges import AttnRanges
 from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
-from zeus.meta.collection.comm_meta import CommMeta, GroupCastCollectiveArg
+from zeus.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
 from zeus.meta.collection.dispatch_meta import DispatchMeta
 from zeus.meta.container.bucket import AttnBucket
 from zeus.meta.container.chunk import AttnChunk
@@ -106,19 +107,20 @@ class HostRankEntry:
 
     def get_host_calc_area(self) -> int:
         """Get the host calc area"""
-        return sum(slice.area for slice in self.attn_calc_host_slice_local_list)
+        return sum(
+            attn_slice.area for attn_slice in self.attn_calc_host_slice_local_list
+        )
 
     def get_remote_calc_area(self, chunk_idx: int | None = None) -> int:
         """Get the remote calc area (w.r.t. a specific chunk)"""
         if chunk_idx is None:  # return the remote calc area for all chunks
             return sum(
-                slice.area
-                for slice_list in self.attn_calc_remote_slice_list_per_chunk
-                for slice in slice_list
+                attn_slice.area
+                for attn_slice in chain(*self.attn_calc_remote_slice_list_per_chunk)
             )
         return sum(
-            slice.area
-            for slice in self.attn_calc_remote_slice_list_per_chunk[chunk_idx]
+            attn_slice.area
+            for attn_slice in self.attn_calc_remote_slice_list_per_chunk[chunk_idx]
         )
 
     def get_remote_comm_size(self, chunk_idx: int | None = None) -> int:
@@ -147,6 +149,9 @@ class TransferInfo:
     k_ranges_global_send_to_per_rank: list[AttnRanges]
     k_ranges_local_send_to_per_rank: list[AttnRanges]
 
+    group_cast_ranges_global_transfer: GroupCastRanges
+    group_cast_ranges_local_send_to: GroupCastRanges
+
 
 @dataclass
 class TableEntry:
@@ -167,9 +172,9 @@ class TransferTable:
     where table[send_rank][recv_rank] is the send entry from send_rank to recv_rank
 
     Therefore:
-        1. we can get the send args for group cast collective
+        1. we can get the send args for group collective
             using 'k_ranges_local_in_send_buf' in the row of table[this_rank][...]
-        2. we can get the recv args for group cast collective
+        2. we can get the recv args for group collective
             using 'k_ranges_local_in_recv_buf' in the column of table[...][this_rank]
     """
 
@@ -293,8 +298,9 @@ class DistAttnSolver:
 
         self.cp_rank = dist.get_rank(cp_group)
         self.cp_size = dist.get_world_size(cp_group)
-
         self.cp_group = cp_group
+        self.shard_seqlen_q = dispatch_meta_q.shard_seqlen
+        self.shard_seqlen_k = dispatch_meta_k.shard_seqlen
 
         self.overlap_config = overlap_config
         self.overlap_solver = OverlapSolver(alg=self.overlap_config.alg)
@@ -624,68 +630,6 @@ class DistAttnSolver:
     ) -> list[RemoteRankEntry]:
         """Initialize remote rank entry per overlap stage for this rank"""
 
-        remote_rank_entry_per_stage_this_rank: list[RemoteRankEntry] = []
-
-        if not self.overlap_config.enable:
-            # HACK: this is a deprecated branch to roll back to the status w/o multi-stage overlap
-            # which is equal to:
-            #   1. static overlap mode (guaranteed by the overlap config)
-            #   2. overlap degree == 1 (guaranteed by the overlap config)
-            #   3. (max) num chunks == 1 (guaranteed by the overlap config)
-            self.overlap_degree = 1
-
-            if zeus.is_sanity_check_enable():
-                assert (
-                    self.overlap_num_chunks == 1
-                ), f"The {self.overlap_num_chunks=} must be 1 with {self.overlap_chunk_size=}"
-
-            # since num chunks == 1, we can directly extract the first chunk
-            remote_multik_slice_global_list = (
-                host_rank_entry_this_rank.attn_calc_remote_slice_list_per_chunk[0]
-            )
-
-            remote_slice_local_list: list[AttnSlice] = []
-            for multik_slice in remote_multik_slice_global_list:
-                k_ranges_local = (
-                    host_rank_entry_this_rank.remote_k_ranges_global.make_ranges_local(
-                        multik_slice.k_ranges,  # type: ignore
-                        is_self_merged=True,
-                    ).merge()
-                )
-
-                if zeus.is_sanity_check_enable():
-                    # attn的remote_k_ranges满足连续性（不管有没有被chunk）, merge完成之后最多只剩一个range
-                    # 为0则代表没有k_ranges在（这个chunk所截取的）remote上
-                    assert (
-                        len(k_ranges_local) <= 1
-                    ), f"{k_ranges_local=}, {host_rank_entry_this_rank.remote_k_ranges_global=}"
-
-                if len(k_ranges_local) == 1:
-                    remote_slice_local_list.append(
-                        AttnSlice(
-                            q_range=multik_slice.q_range,
-                            k_range=k_ranges_local[0],  # type: ignore
-                            mask_type=multik_slice.mask_types[0],  # type: ignore
-                        )
-                    )
-
-            remote_rank_entry_per_stage_this_rank.append(
-                RemoteRankEntry(  # HACK: construct remote rank entry just by copying from host rank entry
-                    host_k_ranges_global=host_rank_entry_this_rank.host_k_ranges_global,
-                    remote_k_ranges_global=host_rank_entry_this_rank.remote_k_ranges_global,
-                    attn_calc_remote_slice_local_list=remote_slice_local_list,
-                )
-            )
-
-            # DE-BUG: log remote_rank_entry_per_stage_this_rank
-            # from zeus.utils import write_rank
-            # write_rank(
-            #     repr(remote_rank_entry_per_stage_this_rank),
-            #     "remote_rank_entry_per_stage_this_rank_rollback.log",
-            # )
-
-            return remote_rank_entry_per_stage_this_rank
-
         # -------   caculate calc/comm cost pairs  ------ #
 
         chunk_costs = self._calc_cost_pairs_per_chunk(
@@ -879,8 +823,8 @@ class DistAttnSolver:
         # from zeus.utils import write_rank
         # write_rank(
         #     msg=(
-        #         f"{best_overlap_degree_this_rank=} | {self.overlap_degree=} \n\n"
-        #         f"| {self.overlap_config=} | \n\n"
+        #         f"{best_overlap_degree_this_rank=} | {self.overlap_degree=} | \n\n"
+        #         f"{self.overlap_config=} | \n\n"
         #         f"{len(chunk_costs)=} | {chunk_costs=} | \n\n"
         #         f"{len(cost_partitions)=} | {cost_partitions=} | \n\n"
         #         f"{len(solution_dict)=} | {solution_dict=} | \n\n"
@@ -959,11 +903,10 @@ class DistAttnSolver:
         map_slice_q_range_to_k_ranges: defaultdict[AttnRange, AttnRanges] = defaultdict(
             AttnRanges
         )
-        for slice_list in attn_calc_remote_slice_list_per_chunk_this_stage:
-            for slice in slice_list:
-                map_slice_q_range_to_k_ranges[slice.q_range].extend(  # type: ignore
-                    slice.k_ranges  # type: ignore
-                )
+        for attn_slice in chain(*attn_calc_remote_slice_list_per_chunk_this_stage):
+            map_slice_q_range_to_k_ranges[attn_slice.q_range].extend(  # type: ignore
+                attn_slice.k_ranges  # type: ignore
+            )
 
         # construct the attn_calc_remote_slice_local_list_this_stage
         slice_tuples: list[tuple[AttnRange, AttnRanges]] = sorted(
@@ -1060,16 +1003,11 @@ class DistAttnSolver:
         # fill up transfer table
         for send_rank in range(self.cp_size):  # for each send_ranki
             transfer_info = transfer_info_per_rank[send_rank]
-
-            # init group_cast_ranges for global/local k ranges that send_ranki needs to send to
-            # which splits the local ranges into non-overlapped local ranges
-            group_cast_ranges_global_transfer = GroupCastRanges(
-                cp_size=self.cp_size,
-                ranges_per_rank=transfer_info.k_ranges_global_send_to_per_rank,
+            group_cast_ranges_global_transfer = (
+                transfer_info.group_cast_ranges_global_transfer
             )
-            group_cast_ranges_local_send_to = GroupCastRanges(
-                cp_size=self.cp_size,
-                ranges_per_rank=transfer_info.k_ranges_local_send_to_per_rank,
+            group_cast_ranges_local_send_to = (
+                transfer_info.group_cast_ranges_local_send_to
             )
 
             # for each non-overlapped global/local k range that send_ranki needs to send to
@@ -1077,37 +1015,70 @@ class DistAttnSolver:
             # and append it to k_ranges_local_in_send_buf at the (send_ranki, recv_rankj) table entry
             for r in group_cast_ranges_global_transfer:
                 k_range = AttnRange(start=r.start, end=r.end)
-                for recv_rank in r.rank_set:
+                if send_rank == self.cp_rank:  # the send row for this rank
+                    for recv_rank in r.rank_set:
+                        transfer_table.append_k_ranges_global(
+                            send_rank=self.cp_rank,
+                            recv_rank=recv_rank,
+                            k_range=k_range,
+                        )
+                elif self.cp_rank in r.rank_set:  # the recv col for this rank
                     transfer_table.append_k_ranges_global(
                         send_rank=send_rank,
-                        recv_rank=recv_rank,
-                        k_range=k_range,
-                    )
-            for r in group_cast_ranges_local_send_to:
-                k_range = AttnRange(start=r.start, end=r.end)
-                for recv_rank in r.rank_set:
-                    transfer_table.append_k_ranges_local_in_send_buf(
-                        send_rank=send_rank,
-                        recv_rank=recv_rank,
+                        recv_rank=self.cp_rank,
                         k_range=k_range,
                     )
 
-            for recv_rank in range(self.cp_size):
-                # sort the global/local k ranges to send for each dest recv_rankj
+            for r in group_cast_ranges_local_send_to:
+                k_range = AttnRange(start=r.start, end=r.end)
+                if send_rank == self.cp_rank:  # the send row for this rank
+                    for recv_rank in r.rank_set:
+                        transfer_table.append_k_ranges_local_in_send_buf(
+                            send_rank=self.cp_rank,
+                            recv_rank=recv_rank,
+                            k_range=k_range,
+                        )
+                elif self.cp_rank in r.rank_set:  # the recv col for this rank
+                    transfer_table.append_k_ranges_local_in_send_buf(
+                        send_rank=send_rank,
+                        recv_rank=self.cp_rank,
+                        k_range=k_range,
+                    )
+
+            # sort the k ranges in each table entry
+            if send_rank == self.cp_rank:  # the send row for this rank
+                for recv_rank in range(self.cp_size):
+                    transfer_table.sort_k_ranges_global(
+                        send_rank=self.cp_rank,
+                        recv_rank=recv_rank,
+                    )
+                    transfer_table.sort_k_ranges_local_in_send_buf(
+                        send_rank=self.cp_rank,
+                        recv_rank=recv_rank,
+                    )
+                    # fill k_ranges_local_in_recv_buf
+                    transfer_table.make_k_ranges_local_in_recv_buf(
+                        send_rank=self.cp_rank,
+                        recv_rank=recv_rank,
+                        remote_k_ranges_global_for_recv_rank=remote_rank_entry_per_rank[
+                            recv_rank
+                        ].remote_k_ranges_global,
+                    )
+            else:  # the recv col for this rank
                 transfer_table.sort_k_ranges_global(
                     send_rank=send_rank,
-                    recv_rank=recv_rank,
+                    recv_rank=self.cp_rank,
                 )
                 transfer_table.sort_k_ranges_local_in_send_buf(
                     send_rank=send_rank,
-                    recv_rank=recv_rank,
+                    recv_rank=self.cp_rank,
                 )
                 # fill k_ranges_local_in_recv_buf
                 transfer_table.make_k_ranges_local_in_recv_buf(
                     send_rank=send_rank,
-                    recv_rank=recv_rank,
+                    recv_rank=self.cp_rank,
                     remote_k_ranges_global_for_recv_rank=remote_rank_entry_per_rank[
-                        recv_rank
+                        self.cp_rank
                     ].remote_k_ranges_global,
                 )
 
@@ -1129,18 +1100,20 @@ class DistAttnSolver:
             self.cp_rank
         ].remote_k_ranges_global
 
-        transfer_info_this_rank = TransferInfo([], [], [], [])
-
-        # 1. initalize recv transfer info
+        # init k ranges global/local for send_to/recv_from per rank
+        k_ranges_global_recv_from_per_rank: list[AttnRanges] = []
+        k_ranges_local_recv_from_per_rank: list[AttnRanges] = []
+        k_ranges_global_send_to_per_rank: list[AttnRanges] = []
+        k_ranges_local_send_to_per_rank: list[AttnRanges] = []
         for rank in range(self.cp_size):
-            if rank == self.cp_rank:  # no need to recv from this rank
-                transfer_info_this_rank.k_ranges_global_recv_from_per_rank.append(
-                    AttnRanges()
-                )
-                transfer_info_this_rank.k_ranges_local_recv_from_per_rank.append(
-                    AttnRanges()
-                )
+            if rank == self.cp_rank:  # no need to recv from / send to this rank
+                k_ranges_global_recv_from_per_rank.append(AttnRanges())
+                k_ranges_local_recv_from_per_rank.append(AttnRanges())
+                k_ranges_global_send_to_per_rank.append(AttnRanges())
+                k_ranges_local_send_to_per_rank.append(AttnRanges())
                 continue
+
+            # ----------    for k_ranges recv from     ---------- #
 
             # get the global k ranges that this rank needs to recv from current rank
             rank_host_k_ranges_global = remote_rank_entry_per_rank[
@@ -1161,23 +1134,10 @@ class DistAttnSolver:
                 )
             )
             # add to recv transfer info for both global and local ones
-            transfer_info_this_rank.k_ranges_global_recv_from_per_rank.append(
-                k_ranges_global_recv_from_rank
-            )
-            transfer_info_this_rank.k_ranges_local_recv_from_per_rank.append(
-                k_ranges_local_recv_from_rank
-            )
+            k_ranges_global_recv_from_per_rank.append(k_ranges_global_recv_from_rank)
+            k_ranges_local_recv_from_per_rank.append(k_ranges_local_recv_from_rank)
 
-        # 2. initalize send transfer info
-        for rank in range(self.cp_size):
-            if rank == self.cp_rank:  # no need to send to this rank
-                transfer_info_this_rank.k_ranges_global_send_to_per_rank.append(
-                    AttnRanges()
-                )
-                transfer_info_this_rank.k_ranges_local_send_to_per_rank.append(
-                    AttnRanges()
-                )
-                continue
+            # ----------    for k_ranges send to     ---------- #
 
             # get the global k ranges that this rank needs to send to current rank
             rank_remote_k_ranges_global = remote_rank_entry_per_rank[
@@ -1198,12 +1158,28 @@ class DistAttnSolver:
                 )
             )
             # add to send transfer info for both global and local ones
-            transfer_info_this_rank.k_ranges_global_send_to_per_rank.append(
-                k_ranges_global_send_to_rank
-            )
-            transfer_info_this_rank.k_ranges_local_send_to_per_rank.append(
-                k_ranges_local_send_to_rank
-            )
+            k_ranges_global_send_to_per_rank.append(k_ranges_global_send_to_rank)
+            k_ranges_local_send_to_per_rank.append(k_ranges_local_send_to_rank)
+
+        # init group_cast_ranges for global/local k ranges that send_ranki needs to send to
+        # which splits the local ranges into non-overlapped local ranges
+        group_cast_ranges_global_transfer = GroupCastRanges(
+            cp_size=self.cp_size,
+            ranges_per_rank=k_ranges_global_send_to_per_rank,
+        )
+        group_cast_ranges_local_send_to = GroupCastRanges(
+            cp_size=self.cp_size,
+            ranges_per_rank=k_ranges_local_send_to_per_rank,
+        )
+
+        transfer_info_this_rank = TransferInfo(
+            k_ranges_global_recv_from_per_rank=k_ranges_global_recv_from_per_rank,
+            k_ranges_local_recv_from_per_rank=k_ranges_local_recv_from_per_rank,
+            k_ranges_global_send_to_per_rank=k_ranges_global_send_to_per_rank,
+            k_ranges_local_send_to_per_rank=k_ranges_local_send_to_per_rank,
+            group_cast_ranges_global_transfer=group_cast_ranges_global_transfer,
+            group_cast_ranges_local_send_to=group_cast_ranges_local_send_to,
+        )
 
         return transfer_info_this_rank
 
@@ -1274,10 +1250,10 @@ class DistAttnSolver:
 
     @nvtx.instrument_nvtx
     def calc_comm_meta(self) -> CommMeta:
-        """Calculate communication meta for kv group cast collective"""
+        """Calculate communication meta for kv group collective"""
 
         num_remote_tokens_list: list[int] = []
-        group_cast_collective_args_list: list[GroupCastCollectiveArg] = []
+        group_collective_args_list: list[GroupCollectiveArg] = []
 
         for transfer_table_this_stage, remote_rank_entry_per_rank_this_stage in zip(
             self.transfer_table_per_stage,
@@ -1291,29 +1267,29 @@ class DistAttnSolver:
                 self.cp_rank
             ].remote_k_ranges_global.total_seqlen
 
-            group_cast_collective_arg = self._calc_group_cast_collective_arg(
+            group_collective_arg = self._calc_group_collective_arg(
                 transfer_table_this_stage,
                 total_seqlen_host_k,
             )
 
             num_remote_tokens_list.append(num_remote_tokens)
-            group_cast_collective_args_list.append(group_cast_collective_arg)
+            group_collective_args_list.append(group_collective_arg)
 
         # build comm meta
         comm_meta = CommMeta(
-            num_remote_tokens_per_overlap_stage=num_remote_tokens_list,
-            group_cast_collective_args_list=group_cast_collective_args_list,
+            num_remote_tokens_per_stage=num_remote_tokens_list,
+            group_collective_args_list=group_collective_args_list,
         )
 
         return comm_meta
 
     @nvtx.instrument_nvtx
-    def _calc_group_cast_collective_arg(
+    def _calc_group_collective_arg(
         self,
         transfer_table: TransferTable,
         total_seqlen_host_k: int,
-    ) -> GroupCastCollectiveArg:
-        """Calculate group cast collective args from one transfer table
+    ) -> GroupCollectiveArg:
+        """Calculate group collective args from one transfer table
         called in 'self.calc_comm_meta'
         """
         # retrieve group cast ranges for local k ranges that this rank needs to send to
@@ -1358,33 +1334,35 @@ class DistAttnSolver:
                 )
                 for send_rank in range(self.cp_size)
             ],
-            split=False,  # NOTE: no need to split group cast ranges for recv
+            # NOTE: no need to split group cast ranges for recv
+            split=False,
         )
 
         # calc output split size list with src index list
         output_split_size_list = []
         src_index_list = []
 
+        if zeus.is_sanity_check_enable():
+            # NOTE: as for group cast semantics,
+            # there's only one src rank that sends the corr. data into
+            # each non-overlapped range in recv buffer
+            for r in group_cast_ranges_local_recv_from:
+                assert len(r.rank_set) == 1
+
         for r in group_cast_ranges_local_recv_from:
             output_split_size_list.append(r.seqlen)
+            src_index_list.append(r.rank_set.pop())
 
-            if zeus.is_sanity_check_enable():
-                # NOTE: as for group cast semantics,
-                # there's only one src rank that sends the corr. data into
-                # each non-overlapped range in recv buffer
-                assert len(r.rank_set) == 1  # type: ignore
-
-            src_index_list.append(r.rank_set.pop())  # type: ignore
-
-        # build group cast collective arg
-        group_cast_collective_arg = GroupCastCollectiveArg(
+        # build group collective arg
+        group_collective_arg = GroupCollectiveArg(
             input_split_size_list=input_split_size_list,
             output_split_size_list=output_split_size_list,
             dst_indices_list=dst_indices_list,
             src_index_list=src_index_list,
+            world_size=self.cp_size,
         )
 
-        return group_cast_collective_arg
+        return group_collective_arg
 
     @nvtx.instrument_nvtx
     def calc_attn_calc_meta(self) -> AttnCalcMeta:
@@ -1393,8 +1371,8 @@ class DistAttnSolver:
         if zeus.is_sanity_check_enable():
             # check local attn calc
             assert all(
-                slice is not None
-                for slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
+                attn_slice is not None
+                for attn_slice in self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
             )
 
             # check remote attn calc for each overlap stage
@@ -1402,8 +1380,8 @@ class DistAttnSolver:
                 remote_rank_entry_this_stage_this_rank
             ) in self.remote_rank_entry_per_stage_this_rank:
                 assert all(
-                    slice is not None
-                    for slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
+                    attn_slice is not None
+                    for attn_slice in remote_rank_entry_this_stage_this_rank.attn_calc_remote_slice_local_list
                 )
 
         # ---   build local attn args   --- #
@@ -1413,18 +1391,19 @@ class DistAttnSolver:
         )
         local_attn_arg = AttnArg(
             q_ranges=[
-                slice.q_range.to_naive_range()  # type: ignore
-                for slice in host_slice_local_list
+                attn_slice.q_range.to_naive_range()  # type: ignore
+                for attn_slice in host_slice_local_list
             ],
             k_ranges=[
-                slice.k_range.to_naive_range()  # type: ignore
-                for slice in host_slice_local_list
+                attn_slice.k_range.to_naive_range()  # type: ignore
+                for attn_slice in host_slice_local_list
             ],
             is_causal_mapping=[
-                slice.mask_type == AttnMaskType.CAUSAL
-                for slice in host_slice_local_list
+                attn_slice.mask_type == AttnMaskType.CAUSAL
+                for attn_slice in host_slice_local_list
             ],
-            total_area=sum(slice.area for slice in host_slice_local_list),
+            shard_seqlen_q=self.shard_seqlen_q,
+            total_area=sum(attn_slice.area for attn_slice in host_slice_local_list),
         )
 
         # ---   build remote attn args for each overlap stage   --- #
@@ -1439,18 +1418,21 @@ class DistAttnSolver:
             remote_attn_args_list.append(
                 AttnArg(
                     q_ranges=[
-                        slice.q_range.to_naive_range()  # type: ignore
-                        for slice in remote_slice_local_list
+                        attn_slice.q_range.to_naive_range()  # type: ignore
+                        for attn_slice in remote_slice_local_list
                     ],
                     k_ranges=[
-                        slice.k_range.to_naive_range()  # type: ignore
-                        for slice in remote_slice_local_list
+                        attn_slice.k_range.to_naive_range()  # type: ignore
+                        for attn_slice in remote_slice_local_list
                     ],
                     is_causal_mapping=[
-                        slice.mask_type == AttnMaskType.CAUSAL
-                        for slice in remote_slice_local_list
+                        attn_slice.mask_type == AttnMaskType.CAUSAL
+                        for attn_slice in remote_slice_local_list
                     ],
-                    total_area=sum(slice.area for slice in remote_slice_local_list),
+                    shard_seqlen_q=self.shard_seqlen_q,
+                    total_area=sum(
+                        attn_slice.area for attn_slice in remote_slice_local_list
+                    ),
                 )
             )
 

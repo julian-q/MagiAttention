@@ -9,7 +9,7 @@ from torch.testing._internal.common_utils import run_tests
 
 from zeus.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
 from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
-from zeus.meta.collection.comm_meta import CommMeta, GroupCastCollectiveArg
+from zeus.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
 from zeus.testing import parameterize
 from zeus.testing.dist_common import DistTestBase, with_comms
 
@@ -58,24 +58,24 @@ class TestDistFlashAttn(DistTestBase):
                 q_ranges=[[0, 128]],
                 k_ranges=[[0, 128]],
                 is_causal_mapping=[False],
-                max_seqlen_q=128,
-                max_seqlen_k=128,
+                shard_seqlen_q=128,
+                total_area=128 * 128,
             ),
             remote_attn_args_list=[
                 AttnArg(
                     q_ranges=[[0, 128]],
                     k_ranges=[[0, 128 * 3]],
                     is_causal_mapping=[False],
-                    max_seqlen_q=128,
-                    max_seqlen_k=128 * 3,
+                    shard_seqlen_q=128,
+                    total_area=128 * 128 * 3,
                 ),
             ],
         )
 
         comm_meta = CommMeta(
-            num_remote_tokens_per_overlap_stage=[128 * 3],
-            group_cast_collective_args_list=[
-                GroupCastCollectiveArg(
+            num_remote_tokens_per_stage=[128 * 3],
+            group_collective_args_list=[
+                GroupCollectiveArg(
                     input_split_size_list=[128],
                     output_split_size_list=[128, 128, 128],
                     dst_indices_list=[
@@ -84,6 +84,7 @@ class TestDistFlashAttn(DistTestBase):
                     src_index_list=[
                         rank for rank in range(self.world_size) if rank != self.rank
                     ],
+                    world_size=self.world_size,
                 )
             ],
         )

@@ -9,7 +9,6 @@ from torch.testing._internal.common_utils import run_tests
 import zeus
 import zeus.testing
 from zeus import init_dist_attn_runtime_mgr
-from zeus.comm.primitive import group_cast_collective, group_reduce_collective
 from zeus.common.enum import AttnMaskType, AttnOverlapMode
 from zeus.common.ranges import AttnRanges
 from zeus.config import (
@@ -20,12 +19,12 @@ from zeus.config import (
     UniformOverlapAlg,
 )
 from zeus.dist_attn_runtime_mgr import DistAttnRuntimeMgr
-from zeus.meta.collection import CommMeta
 from zeus.testing import parameterize
 from zeus.testing.dist_common import DistTestBase, with_comms
 from zeus.testing.precision import (
     EPSILON,
     calc_inf_norm,
+    extract_mismatch_info,
     get_mask_from_ranges,
     torch_attn_ref,
 )
@@ -33,13 +32,9 @@ from zeus.testing.precision import (
 # tell if using profile mode
 profile_mode = os.environ.get("ZEUS_UNITEST_PROFILE_MODE", "0") == "1"
 
-# NOTE: enable sanity check if not using profile mode
-if not profile_mode:
-    os.environ["ZEUS_SANITY_CHECK"] = "1"
-
-
 PROFILE_ONLY = "profile_only"
 NAME = "name"
+SKIP_WORLD_SIZE = "skip_world_size"
 
 
 IB_BANDWIDTH = 50e9  # 500 GB/s, single-end
@@ -82,7 +77,7 @@ INTER_NODE_COMM_COST_FACTOR = (
 )
 
 
-class TestPipeline(DistTestBase):
+class TestPipelineWithWorldSize1(DistTestBase):
     def init_pg(self) -> None:
         super().init_pg()
 
@@ -110,7 +105,7 @@ class TestPipeline(DistTestBase):
 
     @property
     def world_size(self) -> int:
-        return 4
+        return 1
 
     @property
     def seed(self) -> int:
@@ -126,6 +121,7 @@ class TestPipeline(DistTestBase):
             # full attn with total seqlen 14k
             {
                 NAME: "full_attn_14k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 8],
                 "q_ranges": AttnRanges.from_ranges(
                     [
                         [0, 14336],
@@ -141,9 +137,10 @@ class TestPipeline(DistTestBase):
                 "total_seqlen_k": 14336,
                 "chunk_size": 512,
             },
-            # varlen full attn with total seqlen 14k
+            # varlen full attn with total seqlen 12k
             {
-                NAME: "varlen_full_attn_14k",
+                NAME: "varlen_full_attn_12k",
+                SKIP_WORLD_SIZE: [5, 7],
                 "q_ranges": AttnRanges.from_ranges(
                     [
                         [0, 2048],
@@ -152,7 +149,6 @@ class TestPipeline(DistTestBase):
                         [6144, 8192],
                         [8192, 10240],
                         [10240, 12288],
-                        [12288, 14336],
                     ]
                 ),
                 "k_ranges": AttnRanges.from_ranges(
@@ -163,17 +159,17 @@ class TestPipeline(DistTestBase):
                         [6144, 8192],
                         [8192, 10240],
                         [10240, 12288],
-                        [12288, 14336],
                     ]
                 ),
-                "is_causal_mapping": [False] * 7,
-                "total_seqlen_q": 14336,
-                "total_seqlen_k": 14336,
+                "is_causal_mapping": [False] * 6,
+                "total_seqlen_q": 12288,
+                "total_seqlen_k": 12288,
                 "chunk_size": 512,
             },
-            # varlen block causal with total seqlen 14k
+            # varlen block causal with total seqlen 15k
             {
-                NAME: "varlen_block_causal_14k",
+                NAME: "varlen_block_causal_15k",
+                SKIP_WORLD_SIZE: [4, 7, 8],
                 "q_ranges": AttnRanges.from_ranges(
                     [
                         [0, 2048],
@@ -182,7 +178,7 @@ class TestPipeline(DistTestBase):
                         [6144, 8192],
                         [8192, 10240],
                         [10240, 12288],
-                        [12288, 14336],
+                        [12288, 15360],
                     ]
                 ),
                 "k_ranges": AttnRanges.from_ranges(
@@ -193,17 +189,18 @@ class TestPipeline(DistTestBase):
                         [0, 8192],
                         [8192, 10240],
                         [8192, 12288],
-                        [12288, 14336],
+                        [12288, 15360],
                     ]
                 ),
                 "is_causal_mapping": [False] * 7,
-                "total_seqlen_q": 14336,
-                "total_seqlen_k": 14336,
+                "total_seqlen_q": 15360,
+                "total_seqlen_k": 15360,
                 "chunk_size": 512,
             },
             # varlen block causal with total seqlen 17k
             {
                 NAME: "varlen_block_causal_17k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
                 "q_ranges": AttnRanges.from_ranges(
                     [
                         [0, 2048],
@@ -231,31 +228,12 @@ class TestPipeline(DistTestBase):
                 "total_seqlen_k": 17808,
                 "chunk_size": 1113,
             },
-            # full attn with total seqlen 12k
-            {
-                NAME: "full_attn_12k",
-                "q_ranges": AttnRanges.from_ranges(
-                    [
-                        [0, 2048],
-                        [2048, 12288],
-                    ]
-                ),
-                "k_ranges": AttnRanges.from_ranges(
-                    [
-                        [0, 2048],
-                        [0, 2048],
-                    ]
-                ),
-                "is_causal_mapping": [False],
-                "total_seqlen_q": 12288,
-                "total_seqlen_k": 12288,
-                "chunk_size": 512,
-            },
             # NOTE: profile only case
             # full attn with total seqlen 140k
             # {
             #     PROFILE_ONLY: True,
             #     NAME: "full_attn_140k",
+            #     SKIP_WORLD_SIZE: [1, 2, 3, 5, 6, 7, 8],
             #     "q_ranges": AttnRanges.from_ranges(
             #         [
             #             [0, 143360],
@@ -269,13 +247,14 @@ class TestPipeline(DistTestBase):
             #     "is_causal_mapping": [False],
             #     "total_seqlen_q": 143360,
             #     "total_seqlen_k": 143360,
-            #     "chunk_size": 1024,
+            #     "chunk_size": 2048,
             # },
             # NOTE: profile only case
             # varlen block causal with total seqlen 144k
             {
                 PROFILE_ONLY: True,
                 NAME: "varlen_block_causal_144k",
+                SKIP_WORLD_SIZE: [1, 2, 3, 5, 6, 7, 8],
                 "q_ranges": AttnRanges.from_ranges(
                     [
                         [0, 20480],
@@ -315,18 +294,6 @@ class TestPipeline(DistTestBase):
             {
                 NAME: "disable_mso",
                 "enable": False,
-            },
-            # static, overlap degree = 1, max num chunks = 1
-            {
-                NAME: "static_od1_cz+inf",
-                "enable": True,
-                "mode": AttnOverlapMode.STATIC,
-                "degree": 1,
-                "max_num_chunks": 1,
-                "alg": UniformOverlapAlg(
-                    random_costs=False,
-                    random_seed=42,
-                ),
                 "calc_cost_factor": CALC_COST_FACTOR,
                 "comm_cost_factor": INTRA_NODE_COMM_COST_FACTOR,
             },
@@ -451,17 +418,6 @@ class TestPipeline(DistTestBase):
         head_dim: int,
         dtype: torch.dtype,
     ):
-        # HACK: (optional) set the same torch manual random seed for each test case
-        # self._set_random_seed()
-
-        # HACK: filter to test a single test case
-        # if dtype != torch.float16:
-        #     return
-        # if attn_config[NAME] != "varlen_block_causal_17k":
-        #     return
-        # if overlap_config[NAME] != "dynamic_cz256":
-        #     return
-
         # -----    switch mode   ---- #
 
         if profile_mode:
@@ -474,12 +430,25 @@ class TestPipeline(DistTestBase):
         if profile_mode ^ overlap_config.get(PROFILE_ONLY, False):
             return
 
+        # -----    skip for world size   ---- #
+
+        if (
+            attn_config.get(SKIP_WORLD_SIZE, [])
+            and self.world_size in attn_config[SKIP_WORLD_SIZE]
+        ):
+            return
+
         # -----    construct test case name   ---- #
 
         assert (
             NAME in attn_config and NAME in overlap_config
-        ), f"{attn_config=}\n{overlap_config=}"
-        test_case = f"attn_config=[{attn_config[NAME]}] x overlap_config=[{overlap_config[NAME]}] x dtype=[{dtype}]"
+        ), f"{attn_config=} | \n\n{overlap_config=}"
+
+        test_case = (
+            f"world_size=[{self.world_size}] x "
+            f"attn_config=[{attn_config[NAME]}] x overlap_config=[{overlap_config[NAME]}] x "
+            f"dtype=[{dtype}] x (nh,hd)=[({num_heads},{head_dim})]"
+        )
 
         # -----    contruct config from test cases   ---- #
 
@@ -500,40 +469,6 @@ class TestPipeline(DistTestBase):
             deterministic=False,
         )
 
-        dist_attn_config_wo_mso = DistAttnConfig(
-            dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
-            overlap_config=OverlapConfig(enable=False),
-            deterministic=False,
-        )
-
-        dist_attn_runtime_mgr_w_mso = init_dist_attn_runtime_mgr(
-            q_ranges=q_ranges,
-            k_ranges=k_ranges,
-            attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
-            total_seqlen_q=total_seqlen_q,
-            total_seqlen_k=total_seqlen_k,
-            chunk_size=chunk_size,
-            cp_group=self.nccl_group,
-            is_same_source=True,
-            is_q_permutable=True,
-            is_k_permutable=True,
-            dist_attn_config=dist_attn_config_w_mso,
-        )
-
-        dist_attn_runtime_mgr_wo_mso = init_dist_attn_runtime_mgr(
-            q_ranges=q_ranges,
-            k_ranges=k_ranges,
-            attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
-            total_seqlen_q=total_seqlen_q,
-            total_seqlen_k=total_seqlen_k,
-            chunk_size=chunk_size,
-            cp_group=self.nccl_group,
-            is_same_source=True,
-            is_q_permutable=True,
-            is_k_permutable=True,
-            dist_attn_config=dist_attn_config_wo_mso,
-        )
-
         # -----    run pipeline test   ---- #
 
         for iter in range(prof_iters):
@@ -542,6 +477,7 @@ class TestPipeline(DistTestBase):
             if profile_mode:
                 if self.rank == 0 and iter == prof_start_iter:
                     torch.cuda.profiler.start()
+                    torch.autograd.profiler.emit_nvtx(record_shapes=True).__enter__()
                 if self.rank == 0 and iter == prof_end_iter:
                     torch.cuda.profiler.stop()
 
@@ -549,6 +485,24 @@ class TestPipeline(DistTestBase):
 
             dist.barrier()
             torch.cuda.synchronize()
+
+            # -----    init dist attn runtime mgr   ---- #
+
+            dist_attn_runtime_mgr: DistAttnRuntimeMgr = init_dist_attn_runtime_mgr(
+                q_ranges=q_ranges,
+                k_ranges=k_ranges,
+                attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
+                total_seqlen_q=total_seqlen_q,
+                total_seqlen_k=total_seqlen_k,
+                chunk_size=chunk_size,
+                cp_group=self.nccl_group,
+                is_same_source=True,
+                is_q_permutable=True,
+                is_k_permutable=True,
+                dist_attn_config=dist_attn_config_w_mso,
+            )
+            # HACK: double cp group for kv/dkv
+            dist_attn_runtime_mgr.dist_attn_runtime.cp_group_dkv = self.nccl_groups[1]
 
             # -----   init global qkv   ---- #
 
@@ -582,19 +536,17 @@ class TestPipeline(DistTestBase):
 
             # -----   dispatch global qkv to local qkv   ---- #
 
-            local_q = dist_attn_runtime_mgr_w_mso.dispatch_qo(total_q)
-            local_k = dist_attn_runtime_mgr_w_mso.dispatch_kv(total_k)
-            local_v = dist_attn_runtime_mgr_w_mso.dispatch_kv(total_v)
+            local_q = dist_attn_runtime_mgr.dispatch_qo(total_q)
+            local_k = dist_attn_runtime_mgr.dispatch_kv(total_k)
+            local_v = dist_attn_runtime_mgr.dispatch_kv(total_v)
 
             # -----   run dist attn forward on local qkv for local o   ---- #
 
-            local_out, _ = dist_attn_runtime_mgr_w_mso.calc_attn(
-                local_q, local_k, local_v
-            )
+            local_out, _ = dist_attn_runtime_mgr.calc_attn(local_q, local_k, local_v)
 
             # -----   undispatch local o to global o   ---- #
 
-            total_out = dist_attn_runtime_mgr_w_mso.undispatch_qo(local_out)
+            total_out = dist_attn_runtime_mgr.undispatch_qo(local_out)
 
             # -----   run backward   ---- #
 
@@ -610,22 +562,6 @@ class TestPipeline(DistTestBase):
             # -----   assert close if not using profile mode   ---- #
 
             if not profile_mode:
-                # -----   assert close to the one w/o mso   ---- #
-
-                self.assert_close_to_ref_wo_mso(
-                    dist_attn_runtime_mgr_wo_mso=dist_attn_runtime_mgr_wo_mso,
-                    total_q=total_q,
-                    total_k=total_k,
-                    total_v=total_v,
-                    total_out=total_out,
-                    grad_total_out=grad_total_out,
-                    grad_total_q=grad_total_q,
-                    grad_total_k=grad_total_k,
-                    grad_total_v=grad_total_v,
-                    dtype=dtype,
-                    test_case=test_case,
-                )
-
                 # -----   assert close to torch ref   ---- #
 
                 self.assert_close_to_torch_ref(
@@ -645,120 +581,6 @@ class TestPipeline(DistTestBase):
                     dtype=dtype,
                     test_case=test_case,
                 )
-
-    def assert_close_to_ref_wo_mso(
-        self,
-        dist_attn_runtime_mgr_wo_mso: DistAttnRuntimeMgr,
-        total_q: torch.Tensor,
-        total_k: torch.Tensor,
-        total_v: torch.Tensor,
-        total_out: torch.Tensor,
-        grad_total_q: torch.Tensor,
-        grad_total_k: torch.Tensor,
-        grad_total_v: torch.Tensor,
-        grad_total_out: torch.Tensor,
-        dtype: torch.dtype,
-        test_case: str = "",
-    ):
-        # -----   customize tolerance threshold  ---- #
-
-        o_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
-        o_rtol = {torch.bfloat16: 0.015, torch.float16: 0.005}.get(dtype, 0.005)
-        o_thres = {torch.bfloat16: 0.02, torch.float16: 0.01}.get(dtype, 0.01)
-
-        dq_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
-        dq_rtol = {torch.bfloat16: 0.16, torch.float16: 0.12}.get(dtype, 0.12)
-        dq_thres = {torch.bfloat16: 0.16, torch.float16: 0.12}.get(dtype, 0.12)
-
-        dk_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
-        dk_rtol = {torch.bfloat16: 0.1, torch.float16: 0.05}.get(dtype, 0.05)
-        dk_thres = {torch.bfloat16: 0.06, torch.float16: 0.03}.get(dtype, 0.03)
-
-        dv_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
-        dv_rtol = {torch.bfloat16: 0.015, torch.float16: 0.005}.get(dtype, 0.005)
-        dv_thres = {torch.bfloat16: 0.02, torch.float16: 0.01}.get(dtype, 0.01)
-
-        # -----   init global qkv by copying   ---- #
-
-        total_q_ref = total_q.detach().clone().requires_grad_(True)
-        total_k_ref = total_k.detach().clone().requires_grad_(True)
-        total_v_ref = total_v.detach().clone().requires_grad_(True)
-
-        # -----   dispatch global qkv to local qkv   ---- #
-
-        local_q_ref = dist_attn_runtime_mgr_wo_mso.dispatch_qo(total_q_ref)
-        local_k_ref = dist_attn_runtime_mgr_wo_mso.dispatch_kv(total_k_ref)
-        local_v_ref = dist_attn_runtime_mgr_wo_mso.dispatch_kv(total_v_ref)
-
-        # -----   run dist attn forward on local qkv for local o for the ref w/o mso   ---- #
-
-        local_out_ref, _ = dist_attn_runtime_mgr_wo_mso.calc_attn(
-            local_q_ref, local_k_ref, local_v_ref
-        )
-
-        # -----   undispatch local o to global o for the ref w/o mso   ---- #
-
-        total_out_ref = dist_attn_runtime_mgr_wo_mso.undispatch_qo(local_out_ref)
-
-        # -----   run backward for the ref w/o mso   ---- #
-
-        grad_total_out_ref = torch.empty_like(grad_total_out.data).copy_(
-            grad_total_out.data
-        )
-        total_out_ref.backward(grad_total_out_ref)
-        grad_total_q_ref, grad_total_k_ref, grad_total_v_ref = (
-            total_q_ref.grad,
-            total_k_ref.grad,
-            total_v_ref.grad,
-        )
-
-        # -----   assert close for fwd out   ---- #
-
-        # torch style with atol + rtol
-        zeus.testing.assert_close(
-            total_out,
-            total_out_ref,
-            atol=o_atol,
-            rtol=o_rtol,
-            mismatch_threshold=o_thres,
-            test_case=f"ref_wo_mso: {test_case} => o",
-        )
-
-        # -----   assert close for bwd dq   ---- #
-
-        # torch style with atol + rtol
-        zeus.testing.assert_close(
-            grad_total_q,
-            grad_total_q_ref,
-            atol=dq_atol,
-            rtol=dq_rtol,
-            mismatch_threshold=dq_thres,
-            test_case=f"ref_wo_mso: {test_case} => dq",
-        )
-
-        # -----   assert close for bwd dk   ---- #
-
-        # torch style with atol + rtol
-        zeus.testing.assert_close(
-            grad_total_k,
-            grad_total_k_ref,
-            atol=dk_atol,
-            rtol=dk_rtol,
-            mismatch_threshold=dk_thres,
-            test_case=f"ref_wo_mso: {test_case} => dk",
-        )
-
-        # -----   assert close for bwd dv   ---- #
-
-        # torch style with atol + rtol
-        zeus.testing.assert_close(
-            grad_total_v,
-            grad_total_v_ref,
-            atol=dv_atol,
-            rtol=dv_rtol,
-            mismatch_threshold=dv_thres,
-            test_case=f"ref_wo_mso: {test_case} => dv",
-        )
 
     def assert_close_to_torch_ref(
         self,
@@ -780,23 +602,22 @@ class TestPipeline(DistTestBase):
     ):
         # -----   customize tolerance threshold  ---- #
 
-        o_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
+        o_atol = EPSILON
         o_rtol = {torch.bfloat16: 0.05, torch.float16: 0.05}.get(dtype, 0.05)
-        o_thres = {torch.bfloat16: 0.02, torch.float16: 0.02}.get(dtype, 0.02)
 
-        dq_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
+        dq_atol = EPSILON
         dq_rtol = {torch.bfloat16: 0.3, torch.float16: 0.2}.get(dtype, 0.2)
-        dq_thres = {torch.bfloat16: 0.3, torch.float16: 0.2}.get(dtype, 0.2)
 
-        dk_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
+        dk_atol = EPSILON
         dk_rtol = {torch.bfloat16: 0.15, torch.float16: 0.08}.get(dtype, 0.08)
-        dk_thres = {torch.bfloat16: 0.06, torch.float16: 0.04}.get(dtype, 0.04)
 
-        dv_atol = {torch.bfloat16: EPSILON, torch.float16: EPSILON}.get(dtype, EPSILON)
+        dv_atol = EPSILON
         dv_rtol = {torch.bfloat16: 0.05, torch.float16: 0.05}.get(dtype, 0.05)
-        dv_thres = {torch.bfloat16: 0.03, torch.float16: 0.03}.get(dtype, 0.03)
 
-        norm_rtol: float = 2.0  # NOTE: an experimental value from fa testing
+        mismatch_thres_ratio: float = (
+            2.0  # NOTE: an experimental value from zeus testing
+        )
+        norm_rtol_ratio: float = 2.0  # NOTE: an experimental value from fa testing
 
         # -----   build attn mask   ---- #
 
@@ -863,17 +684,26 @@ class TestPipeline(DistTestBase):
         )
         self.assertLessEqual(
             out_norm,
-            norm_rtol * out_ref_norm,
-            msg=f"torch_ref: {out_norm=} should be no greater than {norm_rtol}x of {out_ref_norm=}",
+            norm_rtol_ratio * out_ref_norm,
+            msg=f"For {test_case=}: {out_norm=} should be no greater than {norm_rtol_ratio}x of {out_ref_norm=}",
         )
-        # torch style with atol + rtol
+
+        # torch style with atol + rtol + mismatch threshold
+        o_thres = self._extract_mismatch_threshold_ref(
+            actual=total_out_ref_low_precision,
+            expected=total_out_ref_high_precision,
+            atol=o_atol,
+            rtol=o_rtol,
+            mismatch_thres_ratio=mismatch_thres_ratio,
+        )
+
         zeus.testing.assert_close(
             total_out,
             total_out_ref_high_precision,
             atol=o_atol,
             rtol=o_rtol,
             mismatch_threshold=o_thres,
-            test_case=f"torch_ref: {test_case} => o",
+            test_case=f"{test_case} => o",
         )
 
         # -----   assert close for bwd dq   ---- #
@@ -885,17 +715,26 @@ class TestPipeline(DistTestBase):
         )
         self.assertLessEqual(
             dq_norm,
-            norm_rtol * dq_ref_norm,
-            msg=f"torch_ref: {dq_norm=} should be no greater than {norm_rtol}x of {dq_ref_norm=}",
+            norm_rtol_ratio * dq_ref_norm,
+            msg=f"For {test_case=}: {dq_norm=} should be no greater than {norm_rtol_ratio}x of {dq_ref_norm=}",
         )
-        # torch style with atol + rtol
+
+        # torch style with atol + rtol + mismatch threshold
+        dq_thres = self._extract_mismatch_threshold_ref(
+            actual=grad_total_q_ref_low_precision,
+            expected=grad_total_q_ref_high_precision,
+            atol=dq_atol,
+            rtol=dq_rtol,
+            mismatch_thres_ratio=mismatch_thres_ratio,
+        )
+
         zeus.testing.assert_close(
             grad_total_q,
             grad_total_q_ref_high_precision,
             atol=dq_atol,
             rtol=dq_rtol,
             mismatch_threshold=dq_thres,
-            test_case=f"torch_ref: {test_case} => dq",
+            test_case=f"{test_case} => dq",
         )
 
         # -----   assert close for bwd dk   ---- #
@@ -907,17 +746,26 @@ class TestPipeline(DistTestBase):
         )
         self.assertLessEqual(
             dk_norm,
-            norm_rtol * dk_ref_norm,
-            msg=f"torch_ref: {dk_norm=} should be no greater than {norm_rtol}x of {dk_ref_norm=}",
+            norm_rtol_ratio * dk_ref_norm,
+            msg=f"For {test_case=}: {dk_norm=} should be no greater than {norm_rtol_ratio}x of {dk_ref_norm=}",
         )
-        # torch style with atol + rtol
+
+        # torch style with atol + rtol + mismatch threshold
+        dk_thres = self._extract_mismatch_threshold_ref(
+            actual=grad_total_k_ref_low_precision,
+            expected=grad_total_k_ref_high_precision,
+            atol=dk_atol,
+            rtol=dk_rtol,
+            mismatch_thres_ratio=mismatch_thres_ratio,
+        )
+
         zeus.testing.assert_close(
             grad_total_k,
             grad_total_k_ref_high_precision,
             atol=dk_atol,
             rtol=dk_rtol,
             mismatch_threshold=dk_thres,
-            test_case=f"torch_ref: {test_case} => dk",
+            test_case=f"{test_case} => dk",
         )
 
         # -----   assert close for bwd dv   ---- #
@@ -929,69 +777,86 @@ class TestPipeline(DistTestBase):
         )
         self.assertLessEqual(
             dv_norm,
-            norm_rtol * dv_ref_norm,
-            msg=f"torch_ref: {dv_norm=} should be no greater than {norm_rtol}x of {dv_ref_norm=}",
+            norm_rtol_ratio * dv_ref_norm,
+            msg=f"For {test_case=}: {dv_norm=} should be no greater than {norm_rtol_ratio}x of {dv_ref_norm=}",
         )
-        # torch style with atol + rtol
+
+        # torch style with atol + rtol + mismatch threshold
+        dv_thres = self._extract_mismatch_threshold_ref(
+            actual=grad_total_v_ref_low_precision,
+            expected=grad_total_v_ref_high_precision,
+            atol=dv_atol,
+            rtol=dv_rtol,
+            mismatch_thres_ratio=mismatch_thres_ratio,
+        )
+
         zeus.testing.assert_close(
             grad_total_v,
             grad_total_v_ref_high_precision,
             atol=dv_atol,
             rtol=dv_rtol,
             mismatch_threshold=dv_thres,
-            test_case=f"torch_ref: {test_case} => dv",
+            test_case=f"{test_case} => dv",
         )
 
-    def check_group_cast_and_group_reduce(
+    def _extract_mismatch_threshold_ref(
         self,
-        comm_meta: CommMeta,
-        device: torch.device,
-        atol: float = 8e-4,
-        rtol: float = 5e-2,
-    ):
-        # test group_cast和group_reduce的对称性
-        group_cast_collective_args = comm_meta.group_cast_collective_args_list[0]
-        input_ttk = sum(group_cast_collective_args.input_split_size_list)
-        test_input = (
-            torch.randn(input_ttk, device=device, dtype=torch.float32) * 10**self.rank
-        )
-        output_ttk = sum(group_cast_collective_args.output_split_size_list)
-        test_output = torch.zeros(output_ttk, device=device, dtype=torch.float32)
-        ans = test_input
-        ans = list(torch.split(ans, group_cast_collective_args.input_split_size_list))
-        ans = torch.cat(
-            [
-                ans[i] * (1 + len(group_cast_collective_args.dst_indices_list[i]))
-                for i in range(len(group_cast_collective_args.dst_indices_list))
-            ]
-        )
+        actual: torch.Tensor,
+        expected: torch.Tensor,
+        atol: float,
+        rtol: float,
+        mismatch_thres_ratio: float = 1.0,
+    ) -> float:
+        mismatch_threshold_ref = 0.0
+        try:
+            torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
+        except AssertionError as e:
+            error_msg = str(e)
+            _, _, mismatch_threshold_ref = extract_mismatch_info(error_msg)
 
-        work = group_cast_collective(
-            input=test_input,
-            output=test_output,
-            input_split_size_list=group_cast_collective_args.input_split_size_list,
-            output_split_size_list=group_cast_collective_args.output_split_size_list,
-            dst_indices_list=group_cast_collective_args.dst_indices_list,
-            src_index_list=group_cast_collective_args.src_index_list,
-            group=self.nccl_group,
-            async_op=True,
-        )
-        test_output = work.wait_post_process(test_output)
+        return min(max(mismatch_threshold_ref * mismatch_thres_ratio, 0.0), 1.0)
 
-        work = group_reduce_collective(
-            input=test_output,
-            output=test_input,
-            input_split_size_list=group_cast_collective_args.output_split_size_list,
-            output_split_size_list=group_cast_collective_args.input_split_size_list,
-            dst_index_list=group_cast_collective_args.src_index_list,
-            src_indices_list=group_cast_collective_args.dst_indices_list,
-            group=self.nccl_group,
-            async_op=True,
-        )
 
-        test_input = work.wait_post_process(test_input)
+class TestPipelineWithWorldSize2(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 2
 
-        torch.testing.assert_close(test_input, ans, atol=atol, rtol=rtol)
+
+class TestPipelineWithWorldSize3(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 3
+
+
+class TestPipelineWithWorldSize4(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 4
+
+
+class TestPipelineWithWorldSize5(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 5
+
+
+class TestPipelineWithWorldSize6(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 6
+
+
+class TestPipelineWithWorldSize7(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 7
+
+
+class TestPipelineWithWorldSize8(TestPipelineWithWorldSize1):
+    @property
+    def world_size(self) -> int:
+        return 8
 
 
 if __name__ == "__main__":

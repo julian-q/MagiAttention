@@ -86,6 +86,9 @@ def calc_dispatch_meta_from_qk_ranges(
         num_chunks_q % cp_size == 0 and num_chunks_k % cp_size == 0
     ), f"Both {num_chunks_q=} and {num_chunks_k=} should be divisible by {cp_size=}."
 
+    shard_seqlen_q = total_seqlen_q // cp_size
+    shard_seqlen_k = total_seqlen_k // cp_size
+
     assert len(q_ranges) == len(k_ranges), (
         f"The length of q_ranges and k_ranges (i.e. batch_size) should be the same, "
         f"but got {len(q_ranges)=}, {len(k_ranges)=}."
@@ -130,6 +133,8 @@ def calc_dispatch_meta_from_qk_ranges(
                 batch_size=batch_size,
                 total_seqlen_q=total_seqlen_q,
                 total_seqlen_k=total_seqlen_k,
+                shard_seqlen_q=shard_seqlen_q,
+                shard_seqlen_k=shard_seqlen_k,
                 num_chunks_q=num_chunks_q,
                 num_chunks_k=num_chunks_k,
                 chunk_size=chunk_size,
@@ -167,6 +172,8 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
     batch_size: int,
     total_seqlen_q: int,
     total_seqlen_k: int,
+    shard_seqlen_q: int,
+    shard_seqlen_k: int,
     num_chunks_q: int,
     num_chunks_k: int,
     chunk_size: int,
@@ -184,6 +191,8 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         batch_size (int): batch size
         total_seqlen_q (int): total sequence length of query
         total_seqlen_k (int): total sequence length of key
+        shard_seqlen_q (int): sequence length of query per cp rank
+        shard_seqlen_k (int): sequence length of key per cp rank
 
         num_chunks_q (int): number of chunks for query
         num_chunks_k (int): number of chunks for key
@@ -211,6 +220,7 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
 
     total_seqlen = total_seqlen_q
     num_chunks = num_chunks_q
+    shard_seqlen = shard_seqlen_q
 
     # q_ranges can be transferred to cu_seqlens_q for sure
     assert q_ranges.is_cu_seqlens(
@@ -275,6 +285,7 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
         attn_mask_type=attn_mask_type,
         batch_size=batch_size,
         total_seqlen=total_seqlen,
+        shard_seqlen=shard_seqlen,
         cp_rank=cp_rank,
         cp_size=cp_size,
         chunk_size=chunk_size,

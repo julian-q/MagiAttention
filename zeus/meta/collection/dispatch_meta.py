@@ -17,6 +17,7 @@ class DispatchMeta:
 
     batch_size: int
     total_seqlen: int
+    shard_seqlen: int
 
     chunk_size: int
     num_chunks: int

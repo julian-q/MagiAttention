@@ -1,35 +1,9 @@
 import torch
 import torch.distributed as dist
 
+from .utils import _get_dims_as_trans_with_dim0, _trans_with_dim0
 
-def _trans_with_dim0(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
-    is_first_dim = dim == 0 or (dim == -1 and len(x.shape) == 1)
-
-    if not is_first_dim:
-        x = x.transpose(0, dim)
-    if not x.is_contiguous():
-        x = x.contiguous()
-
-    return x
-
-
-def _get_dims_as_trans_with_dim0(
-    x_shape: list[int],
-    dim: int = 0,
-) -> tuple[int, list[int]]:
-    shape_len = len(x_shape)
-    assert dim == -1 or 0 <= dim < len(
-        x_shape
-    ), f"dim should be in [0, {shape_len - 1}) or -1"
-
-    this_dim = x_shape[dim]
-
-    other_dims = x_shape.copy()
-    other_dims[0] = this_dim
-    other_dims[dim] = x_shape[0]
-    other_dims = other_dims[1:]
-
-    return this_dim, other_dims
+__all__ = ["all_gather_v"]
 
 
 def all_gather_v(
