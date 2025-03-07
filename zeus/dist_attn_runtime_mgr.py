@@ -1,3 +1,5 @@
+import itertools
+
 import torch
 import torch.distributed as dist
 
@@ -11,8 +13,9 @@ from zeus.meta import (
     calc_dispatch_meta_from_qk_ranges,
 )
 from zeus.meta.collection import DispatchMeta
-from zeus.meta.container import AttnBucket
+from zeus.meta.collection.calc_meta import AttnArg
 from zeus.meta.solver.dist_attn_solver import DistAttnSolver
+from zeus.utils import is_list_value_all
 
 
 class DistAttnRuntimeMgr:
@@ -24,6 +27,12 @@ class DistAttnRuntimeMgr:
         dist_attn_config: DistAttnConfig,
         attn_solver: DistAttnSolver,
         dist_attn_runtime: DistFlashAttnRuntime,
+        *,
+        ref_q_ranges: AttnRanges,
+        ref_k_ranges: AttnRanges,
+        is_same_source: bool,
+        is_q_permutable: bool,
+        is_k_permutable: bool,
     ):
         self.cp_group = cp_group
         self.q_dispatch_meta = q_dispatch_meta
@@ -31,6 +40,12 @@ class DistAttnRuntimeMgr:
         self.dist_attn_config = dist_attn_config
         self.attn_solver = attn_solver
         self.dist_attn_runtime = dist_attn_runtime
+
+        self.ref_q_ranges = ref_q_ranges
+        self.ref_k_ranges = ref_k_ranges
+        self.is_same_source = is_same_source
+        self.is_q_permutable = is_q_permutable
+        self.is_k_permutable = is_k_permutable
 
     def dispatch_qo(self, q_or_o: torch.Tensor) -> torch.Tensor:
         q_or_o = dispatch_func(
@@ -69,21 +84,84 @@ class DistAttnRuntimeMgr:
     ) -> torch.Tensor:
         return dist_attn_func(q, k, v, self.dist_attn_runtime)
 
-    @property
-    def bucket(self) -> AttnBucket:
-        return self.attn_solver.bucket
+    def get_xattn_args(
+        self,
+        ref_xattn_k_ranges: AttnRanges,
+        attn_mask_type: AttnMaskType | list[AttnMaskType],
+        return_host_only: bool = False,
+    ) -> AttnArg:
+        """
+        Get the attn arg for cross attention.
 
-    @property
-    def host_q_ranges_global(self) -> AttnRanges:
-        return self.attn_solver.host_rank_entry_this_rank.host_q_ranges_global
+        Since dist_attn_runtime_mgr may modify q_ranges and k_ranges,
+        if this query tensor needs to perform cross attention with other key tensors later,
+        we may need to update the q_ranges and k_ranges for cross attention.
 
-    @property
-    def host_k_ranges_global(self) -> AttnRanges:
-        return self.attn_solver.host_rank_entry_this_rank.host_k_ranges_global
+        Args:
+            xattn_k_ranges(AttnRanges): The key ranges to be updated for cross attention
+            attn_mask_type(AttnMaskType | list[AttnMaskType]): The attn mask type for cross attention
+            return_host_only(bool): Whether to return the attn arg for cross attention on this rank only
 
-    @property
-    def remote_k_ranges_global(self) -> AttnRanges:
-        return self.attn_solver.host_rank_entry_this_rank.remote_k_ranges_global
+        Returns:
+            attn_arg(AttnArg): The attn arg for cross attention
+        """
+
+        assert is_list_value_all(
+            attn_mask_type, AttnMaskType.FULL
+        ), "Only supports all full attn mask for now."
+
+        host_global_perm_sorted_q_ranges = self.attn_solver.bucket.q_ranges
+        total_global_unperm_xattn_k_ranges_this_rank = AttnRanges()
+        for q_range in host_global_perm_sorted_q_ranges:
+            is_found = False
+            for i, ref_q_range in enumerate(self.ref_q_ranges):
+                if q_range.is_subrange_of(ref_q_range):
+                    total_global_unperm_xattn_k_ranges_this_rank.append(
+                        ref_xattn_k_ranges[i]
+                    )
+                    is_found = True
+            if not is_found:
+                raise ValueError(
+                    f"q_range: {q_range} is not in ref_q_ranges: {self.ref_q_ranges}"
+                )
+
+        if return_host_only:
+            attn_arg = AttnArg(
+                q_ranges=host_global_perm_sorted_q_ranges.make_ranges_local(
+                    host_global_perm_sorted_q_ranges
+                ),
+                k_ranges=total_global_unperm_xattn_k_ranges_this_rank,
+                is_causal_mapping=[False] * len(host_global_perm_sorted_q_ranges),
+                shard_seqlen_q=self.attn_solver.bucket.q_ranges.total_seqlen,
+            )
+            return attn_arg
+
+        cp_size = dist.get_world_size(self.cp_group)
+        total_global_unperm_xattn_k_ranges_per_rank: list[AttnRanges] = [None] * cp_size  # type: ignore[list-item]
+
+        dist.all_gather_object(
+            total_global_unperm_xattn_k_ranges_per_rank,
+            total_global_unperm_xattn_k_ranges_this_rank,
+            group=self.cp_group,
+        )
+
+        # TODO: remove this to dispatch meta
+        total_global_perm_unordered_q_ranges = AttnRanges()
+        bucket_per_rank = self.q_dispatch_meta.buckets_per_rank
+        for bucket in bucket_per_rank:
+            total_global_perm_unordered_q_ranges.extend(bucket.q_ranges)
+
+        total_global_unperm_xattn_k_ranges = AttnRanges.from_ranges(
+            itertools.chain(*total_global_unperm_xattn_k_ranges_per_rank)  # type: ignore[arg-type]
+        )
+
+        attn_arg = AttnArg(
+            q_ranges=total_global_perm_unordered_q_ranges,
+            k_ranges=total_global_unperm_xattn_k_ranges,
+            is_causal_mapping=[False] * len(total_global_perm_unordered_q_ranges),
+            shard_seqlen_q=self.attn_solver.bucket.q_ranges.total_seqlen,
+        )
+        return attn_arg
 
 
 def init_dist_attn_runtime_mgr(
@@ -209,4 +287,9 @@ def init_dist_attn_runtime_mgr(
         dist_attn_config,
         attn_solver,
         dist_attn_runtime,
+        ref_q_ranges=q_ranges,
+        ref_k_ranges=k_ranges,
+        is_same_source=is_same_source,
+        is_q_permutable=is_q_permutable,
+        is_k_permutable=is_k_permutable,
     )

@@ -3,16 +3,19 @@ from dataclasses import dataclass
 import torch
 
 import zeus
+from zeus.common.ranges import AttnRanges
 
 
 @dataclass(repr=False)
 class AttnArg:
-    q_ranges: list[tuple[int, int]]
-    k_ranges: list[tuple[int, int]]
+    q_ranges: AttnRanges
+    k_ranges: AttnRanges
     is_causal_mapping: list[bool]
+    # REVIEW(xiaowu): Is shard_seqlen_q an appropriate name?
     shard_seqlen_q: int
 
-    total_area: int = 0
+    # total area of the attn arg, -1 means unknown
+    total_area: int = -1
 
     # NOTE: 以下变量是__post_init__自动生成的，并作为ffa的args
     # max_seqlen_q: int
@@ -29,11 +32,11 @@ class AttnArg:
         batch_size = len(self.q_ranges)
 
         # init tensors
-        self.q_ranges_tensor = torch.tensor(
-            self.q_ranges, dtype=torch.int32, device=torch.cuda.current_device()
+        self.q_ranges_tensor = self.q_ranges.to_tensor(
+            device=torch.cuda.current_device()
         )
-        self.k_ranges_tensor = torch.tensor(
-            self.k_ranges, dtype=torch.int32, device=torch.cuda.current_device()
+        self.k_ranges_tensor = self.k_ranges.to_tensor(
+            device=torch.cuda.current_device()
         )
         self.is_causal_mapping_tensor = torch.tensor(
             self.is_causal_mapping, dtype=torch.bool, device=torch.cuda.current_device()
@@ -43,7 +46,7 @@ class AttnArg:
         if zeus.is_sanity_check_enable():
             # 检查每一个k_ranges的left < right
             for k_ranges in self.k_ranges:
-                assert k_ranges[0] < k_ranges[1]
+                assert k_ranges.start < k_ranges.end
 
             if batch_size > 0:
                 assert self.q_ranges_tensor.shape == torch.Size(
@@ -60,10 +63,10 @@ class AttnArg:
         if batch_size > 0:
             self.skip_attn = False
             self.max_seqlen_q = max(
-                q_range[1] - q_range[0] for q_range in self.q_ranges
+                q_range.end - q_range.start for q_range in self.q_ranges
             )
             self.max_seqlen_k = max(
-                k_range[1] - k_range[0] for k_range in self.k_ranges
+                k_range.end - k_range.start for k_range in self.k_ranges
             )
         elif batch_size == 0:  # no calc needed
             self.skip_attn = True
@@ -86,9 +89,9 @@ class AttnArg:
         start, end = 0, self.shard_seqlen_q
         self.out_zero_fill_ranges: list[tuple[int, int]] = []
         for q_range in self.q_ranges:
-            if start < q_range[0]:
-                self.out_zero_fill_ranges.append((start, q_range[0]))
-            start = q_range[1]
+            if start < q_range.start:
+                self.out_zero_fill_ranges.append((start, q_range.start))
+            start = q_range.end
         if start < end:
             self.out_zero_fill_ranges.append((start, end))
 

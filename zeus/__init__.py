@@ -13,17 +13,17 @@ solver
             2. q能不能动、k能不能动 （4种）
 
 -------------------------------------
-        1. qk来源是1个
-            a. q能动, k能动 -> self-attn
-            b. q能动, k不能动 -> invalid
-            c. q不能动, k能动 -> invalid
-            d. q不能动, k不能动 -> 输出meta
+        1. is_same_source
+            a. (Done) q is permutable, k is permutable -> self-attn
+            b. q is permutable, k is not permutable -> invalid
+            c. q is not permutable, k is permutable -> invalid
+            d. q is not permutable, k is not permutable -> output meta
 
-        2. qk来源是2个
-            a. q能动, k能动 -> 纯cross attn
-            b. q能动, k不能动 -> t5
-            c. q不能动, k能动 -> multi-modal
-            d. q不能动, k不能动 -> 输出meta
+        2. is_not_same_source
+            a. q is permutable, k is permutable -> pure cross attn
+            b. q is permutable, k is not permutable -> t5
+            c. q is not permutable, k is permutable -> multi-modal
+            d. (TODO) q is not permutable, k is not permutable -> output meta
 
     comm_meta
         local, stage0, ..., stageN

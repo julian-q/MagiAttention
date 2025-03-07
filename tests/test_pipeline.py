@@ -77,7 +77,7 @@ INTER_NODE_COMM_COST_FACTOR = (
 )
 
 
-class TestPipelineWithWorldSize1(DistTestBase):
+class TestPipelineBase(DistTestBase):
     def init_pg(self) -> None:
         super().init_pg()
 
@@ -111,7 +111,6 @@ class TestPipelineWithWorldSize1(DistTestBase):
     def seed(self) -> int:
         return 42
 
-    @skip_if_lt_x_gpu(4)
     @with_comms
     @parameterize(
         # TODO:
@@ -817,46 +816,84 @@ class TestPipelineWithWorldSize1(DistTestBase):
         return min(max(mismatch_threshold_ref * mismatch_thres_ratio, 0.0), 1.0)
 
 
-class TestPipelineWithWorldSize2(TestPipelineWithWorldSize1):
+class TestPipelineWithWorldSize1(TestPipelineBase):
+    @property
+    def world_size(self) -> int:
+        return 1
+
+    @skip_if_lt_x_gpu(1)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
+
+
+class TestPipelineWithWorldSize2(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 2
 
+    @skip_if_lt_x_gpu(2)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
-class TestPipelineWithWorldSize3(TestPipelineWithWorldSize1):
+
+class TestPipelineWithWorldSize3(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 3
 
+    @skip_if_lt_x_gpu(3)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
-class TestPipelineWithWorldSize4(TestPipelineWithWorldSize1):
+
+class TestPipelineWithWorldSize4(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 4
 
+    @skip_if_lt_x_gpu(4)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
-class TestPipelineWithWorldSize5(TestPipelineWithWorldSize1):
+
+class TestPipelineWithWorldSize5(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 5
 
+    @skip_if_lt_x_gpu(5)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
-class TestPipelineWithWorldSize6(TestPipelineWithWorldSize1):
+
+class TestPipelineWithWorldSize6(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 6
 
+    @skip_if_lt_x_gpu(6)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
-class TestPipelineWithWorldSize7(TestPipelineWithWorldSize1):
+
+class TestPipelineWithWorldSize7(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 7
 
+    @skip_if_lt_x_gpu(7)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
-class TestPipelineWithWorldSize8(TestPipelineWithWorldSize1):
+
+class TestPipelineWithWorldSize8(TestPipelineBase):
     @property
     def world_size(self) -> int:
         return 8
+
+    @skip_if_lt_x_gpu(8)
+    def test_pipeline(self, *args, **kwargs):
+        super().test_pipeline(*args, **kwargs)
 
 
 if __name__ == "__main__":

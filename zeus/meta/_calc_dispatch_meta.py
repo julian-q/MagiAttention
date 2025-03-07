@@ -100,12 +100,6 @@ def calc_dispatch_meta_from_qk_ranges(
         len(attn_mask_type) == batch_size
     ), f"If attn_mask_type is a list, its length ({len(attn_mask_type)}) should be equal to batch_size ({batch_size})."
 
-    # TODO: limited to self-attn settings for now
-    assert is_same_source and is_q_permutable and is_k_permutable, (
-        "For now, only support self-attn, "
-        "where is_same_source is True and both q and k are permutable"
-    )
-
     assert (
         dispatch_config.alg.is_partitions_returned
         and dispatch_config.alg.is_equal_num_workloads
@@ -124,8 +118,8 @@ def calc_dispatch_meta_from_qk_ranges(
 
     # TODO: for now, we seperate different settings in different functions
     # they had better be merged in the future
-    if is_same_source:
-        if is_q_permutable and is_k_permutable:
+    match is_same_source, is_q_permutable, is_k_permutable:
+        case True, True, True:
             return _calc_self_attn_dispatch_meta_from_qk_ranges(
                 q_ranges=q_ranges,
                 k_ranges=k_ranges,
@@ -142,25 +136,28 @@ def calc_dispatch_meta_from_qk_ranges(
                 cp_rank=cp_rank,
                 dispatch_config=dispatch_config,
             )
-        elif not (is_q_permutable and is_k_permutable):
-            raise NotImplementedError("A trivial case with no need to dispatch.")
-        else:
+        case True, False, True | True, True, False:
             raise ValueError(
                 "When is_same_source is True, "
                 "is_q_permutable and is_k_permutable should be either both True or both False."
             )
-    else:
-        if is_q_permutable and is_k_permutable:
-            raise NotImplementedError("An unknown case as a pure cross-attn setting.")
-        elif not (is_q_permutable and is_k_permutable):
+        case True, False, False:
             raise NotImplementedError("A trivial case with no need to dispatch.")
-        elif is_q_permutable:
+        case False, True, True:
+            raise NotImplementedError("An unknown case as a pure cross-attn setting.")
+        case False, True, False:
             raise NotImplementedError(
                 "A cross-attn setting for encoder-decoder transformer like T5."
             )
-        else:
+        case False, False, True:
             raise NotImplementedError(
                 "A cross-attn setting for multi-modal transformer with external encoders."
+            )
+        case False, False, False:
+            raise NotImplementedError("A trivial case with no need to dispatch.")
+        case _:
+            raise ValueError(
+                f"Unknown case with {is_same_source=}, {is_q_permutable=}, {is_k_permutable=}."
             )
 
 
@@ -336,7 +333,7 @@ def _calc_self_attn_areas(
         chunk_size (int | None): the chunk size, which should be divisible by `cp_size`
 
     Returns:
-        AttnBucket: the global bucket
+        global_bucket(AttnBucket): the global bucket
     """
 
     # --------------      pre-check args       -------------- #

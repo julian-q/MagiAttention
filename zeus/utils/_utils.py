@@ -119,7 +119,7 @@ def wrap_to_list(x: Any, broadcast_to_length: int = 1) -> list[Any]:
 
 
 def is_list_value_all(
-    _list: list[Any],
+    _list: list[Any] | Any,
     val: Any = None,
     just_same: bool = False,
     allow_empty: bool = False,

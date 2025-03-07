@@ -1390,14 +1390,12 @@ class DistAttnSolver:
             self.host_rank_entry_this_rank.attn_calc_host_slice_local_list
         )
         local_attn_arg = AttnArg(
-            q_ranges=[
-                attn_slice.q_range.to_naive_range()  # type: ignore
-                for attn_slice in host_slice_local_list
-            ],
-            k_ranges=[
-                attn_slice.k_range.to_naive_range()  # type: ignore
-                for attn_slice in host_slice_local_list
-            ],
+            q_ranges=AttnRanges.from_ranges(
+                [attn_slice.q_range for attn_slice in host_slice_local_list]  # type: ignore[arg-type]
+            ),
+            k_ranges=AttnRanges.from_ranges(
+                [attn_slice.k_range for attn_slice in host_slice_local_list]  # type: ignore[arg-type]
+            ),
             is_causal_mapping=[
                 attn_slice.mask_type == AttnMaskType.CAUSAL
                 for attn_slice in host_slice_local_list
@@ -1417,14 +1415,12 @@ class DistAttnSolver:
             )
             remote_attn_args_list.append(
                 AttnArg(
-                    q_ranges=[
-                        attn_slice.q_range.to_naive_range()  # type: ignore
-                        for attn_slice in remote_slice_local_list
-                    ],
-                    k_ranges=[
-                        attn_slice.k_range.to_naive_range()  # type: ignore
-                        for attn_slice in remote_slice_local_list
-                    ],
+                    q_ranges=AttnRanges.from_ranges(
+                        [attn_slice.q_range for attn_slice in remote_slice_local_list]  # type: ignore[arg-type]
+                    ),
+                    k_ranges=AttnRanges.from_ranges(
+                        [attn_slice.k_range for attn_slice in remote_slice_local_list]  # type: ignore[arg-type]
+                    ),
                     is_causal_mapping=[
                         attn_slice.mask_type == AttnMaskType.CAUSAL
                         for attn_slice in remote_slice_local_list

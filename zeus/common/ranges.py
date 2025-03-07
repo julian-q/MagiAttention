@@ -87,6 +87,32 @@ class AttnRanges:
     NOTE: AttnRanges的sorted和merged解释如下:
         sorted要求AttnRanges中的每个attn_range都按照start由小到大排序
         merged要求AttnRanges中的每个attn_range都按照start由小到大排序, 并且相邻的attn_range不能有重叠
+
+
+    NOTE:
+        Generally, the naming convention for attn_ranges in this repo follows these rules:
+        attn ranges naming qualifier convention:
+            [DIST]_[SCOPE]_[PERM]_[ORDER]_[NAME]_ranges_[SUFFIX...]
+                DIST: host/remote/total - indicates whether ranges are on host or remote device
+                    * host: ranges are on host
+                    * remote: ranges are on remote device
+                    * total: ranges are not on host or remote device, e.g. original reference ranges
+                SCOPE: global/local - indicates whether ranges use global or local indices
+                    * global: ranges use global indices
+                    * local: ranges use local indices
+                PERM: unperm/perm - indicates whether ranges have been permuted
+                    * unperm: ranges have not been permuted
+                    * perm: ranges have been permuted
+                ORDER: unordered/sorted/merged - indicates whether ranges are sorted or merged,
+                    * unordered: ranges are not sorted
+                    * sorted: ranges are sorted by start
+                    * merged: ranges are merged
+                NAME: the name of the ranges
+                SUFFIX: per_rank/per_stage/etc - additional qualifiers for list[AttnRanges]
+
+        Example::
+            host_global_sorted_unperm_ranges_per_rank
+            remote_local_merged_perm_ranges_per_stage
     """
 
     def __init__(self) -> None:

@@ -7,7 +7,13 @@ from zeus.meta.container.bucket import AttnBucket
 
 @dataclass
 class DispatchMeta:
-    """The meta info of sequence dispatch for distributed attention"""
+    """The meta info of sequence dispatch for distributed attention
+
+    Args:
+        TODO: finish docstring
+
+    NOTE: global_bucket
+    """
 
     attn_role: AttnRole
     attn_type: AttnType

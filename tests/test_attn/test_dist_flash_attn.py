@@ -7,6 +7,7 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
+from zeus.common.ranges import AttnRanges
 from zeus.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
 from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
 from zeus.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
@@ -55,16 +56,16 @@ class TestDistFlashAttn(DistTestBase):
 
         attn_calc_meta = AttnCalcMeta(
             local_attn_arg=AttnArg(
-                q_ranges=[[0, 128]],
-                k_ranges=[[0, 128]],
+                q_ranges=AttnRanges.from_ranges([[0, 128]]),
+                k_ranges=AttnRanges.from_ranges([[0, 128]]),
                 is_causal_mapping=[False],
                 shard_seqlen_q=128,
                 total_area=128 * 128,
             ),
             remote_attn_args_list=[
                 AttnArg(
-                    q_ranges=[[0, 128]],
-                    k_ranges=[[0, 128 * 3]],
+                    q_ranges=AttnRanges.from_ranges([[0, 128]]),
+                    k_ranges=AttnRanges.from_ranges([[0, 128 * 3]]),
                     is_causal_mapping=[False],
                     shard_seqlen_q=128,
                     total_area=128 * 128 * 3,
