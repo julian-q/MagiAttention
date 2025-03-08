@@ -91,10 +91,10 @@ def flatten_nested_list(nested_list: NestedIntList) -> list[int]:
         item = stack.pop()  # Pop the last element from the stack
         if isinstance(item, (list, tuple)):
             # If the element is a list, reverse it and extend the stack with its elements
-            stack.extend(item[::-1])  # type: ignore
+            stack.extend(item[::-1])
         else:
             # If the element is not a list, add it to the flat list
-            flat_list.append(item)  # type: ignore
+            flat_list.append(item)  # type: ignore[arg-type]
 
     return flat_list  # Return the fully flattened list
 

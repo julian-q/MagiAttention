@@ -1,6 +1,6 @@
 from typing import Any, TypeAlias, Union
 
-NaiveRange: TypeAlias = tuple[int, int] | list[int]  # type: ignore[misc]
+NaiveRange: TypeAlias = tuple[int, int] | list[int]
 
 
 class RangeError(Exception):

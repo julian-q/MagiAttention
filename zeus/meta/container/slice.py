@@ -66,7 +66,7 @@ class MultiKAttnSlice:
 
             self._area = self.q_range.seqlen * self.k_ranges.total_seqlen
 
-        return self._area  # type: ignore
+        return self._area
 
     @area.setter
     def area(self, area: int):

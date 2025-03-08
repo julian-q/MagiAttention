@@ -33,7 +33,7 @@ class GroundTruthDispatcher(nn.Module):
         self._self_attn_mask: AttnMask = None  # type: ignore
         self._cross_attn_mask: AttnMask = None  # type: ignore
 
-        self._chunk_masks: List[AttnMask] = []  # type: ignore
+        self._chunk_masks: list[AttnMask] = []
 
     def _compute_self_attn_areas(
         self,

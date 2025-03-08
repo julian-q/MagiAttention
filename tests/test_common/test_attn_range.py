@@ -1,7 +1,7 @@
 import unittest
 from unittest import TestCase
 
-from zeus.common.ranges import AttnRange, RangeError
+from zeus.common.range import AttnRange, RangeError
 
 
 class TestAttnRange(TestCase):

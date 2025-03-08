@@ -213,7 +213,7 @@ class AttnRanges:
                 start = attn_range.start
                 end = attn_range.end
                 _merged_ranges.append(AttnRange(start=start, end=end))
-            elif attn_range.start > end:  # a new range can be merged
+            elif attn_range.start > end:  # type: ignore[operator]
                 start = attn_range.start
                 end = attn_range.end
                 _merged_ranges.append(AttnRange(start=start, end=end))

@@ -373,11 +373,9 @@ class AttnMask(nn.Module):
                 device=self.__class__.device,
             ).numpy()
 
-            self._is_pure_causal = (
-                self.mask_flag_array == pure_causal_mask  # type: ignore
-            ).all()
+            self._is_pure_causal = (self.mask_flag_array == pure_causal_mask).all()
 
-        return self._is_pure_causal  # type: ignore
+        return self._is_pure_causal  # type: ignore[return-value]
 
     def is_varlen_full(self) -> bool:
         return (

@@ -463,7 +463,11 @@ class TestPipelineBase(DistTestBase):
         dist_attn_config_w_mso = DistAttnConfig(
             dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
             overlap_config=OverlapConfig(
-                **{k: v for k, v in overlap_config.items() if k not in (NAME, PROFILE_ONLY)}  # type: ignore
+                **{
+                    k: v
+                    for k, v in overlap_config.items()
+                    if k not in (NAME, PROFILE_ONLY)
+                }
             ),
             deterministic=False,
         )

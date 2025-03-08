@@ -88,9 +88,7 @@ def with_comms(func: TestFunc) -> TestFunc:
     assert func is not None
 
     @wraps(func)  # pyre-ignore[6]
-    def wrapper(
-        self, *args: tuple[object], **kwargs: dict[str, Any]  # type: ignore[misc]
-    ) -> None:
+    def wrapper(self, *args: tuple[object], **kwargs: dict[str, Any]) -> None:
         # if backend not specified, and cuda available, then use nccl, else gloo
         if torch.cuda.is_available() and torch.cuda.device_count() >= self.world_size:
             self.device_type = "cuda"
@@ -98,7 +96,7 @@ def with_comms(func: TestFunc) -> TestFunc:
             self.device_type = "cpu"
 
         self.init_pg()
-        func(self, *args, **kwargs)  # type: ignore[misc]
+        func(self, *args, **kwargs)
         self.destroy_pg()
 
     return wrapper

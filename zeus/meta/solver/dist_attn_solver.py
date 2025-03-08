@@ -904,8 +904,8 @@ class DistAttnSolver:
             AttnRanges
         )
         for attn_slice in chain(*attn_calc_remote_slice_list_per_chunk_this_stage):
-            map_slice_q_range_to_k_ranges[attn_slice.q_range].extend(  # type: ignore
-                attn_slice.k_ranges  # type: ignore
+            map_slice_q_range_to_k_ranges[attn_slice.q_range].extend(
+                attn_slice.k_ranges
             )
 
         # construct the attn_calc_remote_slice_local_list_this_stage
@@ -932,7 +932,7 @@ class DistAttnSolver:
                 attn_calc_remote_slice_local_list_this_stage.append(
                     AttnSlice(
                         q_range=q_range,
-                        k_range=k_ranges[0],  # type: ignore
+                        k_range=k_ranges[0],
                         mask_type=AttnMaskType.FULL,
                     )
                 )
@@ -1317,7 +1317,7 @@ class DistAttnSolver:
                 dst_indices_list.append([])
 
             input_split_size_list.append(r.seqlen)
-            dst_indices_list.append(list(r.rank_set))  # type: ignore
+            dst_indices_list.append(list(r.rank_set))
             last_end = r.end
 
         if last_end != total_seqlen_host_k:  # [last_end, seqlen) has no dest rank
