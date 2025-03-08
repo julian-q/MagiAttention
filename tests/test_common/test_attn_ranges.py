@@ -1,8 +1,8 @@
 import unittest
 from unittest import TestCase
 
-from zeus.common.range import AttnRange
-from zeus.common.ranges import AttnRanges, is_valid_cu_seqlens
+from dffa.common.range import AttnRange
+from dffa.common.ranges import AttnRanges, is_valid_cu_seqlens
 
 
 class TestAttnRanges(TestCase):

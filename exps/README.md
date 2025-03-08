@@ -1,4 +1,4 @@
-# Zeus Experiments
+# Distributed Flex-Flash-Attention Experiments
 
 ## Requirements
 

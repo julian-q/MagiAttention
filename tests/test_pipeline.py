@@ -6,22 +6,22 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-import zeus
-import zeus.testing
-from zeus import init_dist_attn_runtime_mgr
-from zeus.common.enum import AttnMaskType, AttnOverlapMode
-from zeus.common.ranges import AttnRanges
-from zeus.config import (
+import dffa
+import dffa.testing
+from dffa import init_dist_attn_runtime_mgr
+from dffa.common.enum import AttnMaskType, AttnOverlapMode
+from dffa.common.ranges import AttnRanges
+from dffa.config import (
     DispatchConfig,
     DistAttnConfig,
     MinHeapDispatchAlg,
     OverlapConfig,
     UniformOverlapAlg,
 )
-from zeus.dist_attn_runtime_mgr import DistAttnRuntimeMgr
-from zeus.testing import parameterize
-from zeus.testing.dist_common import DistTestBase, with_comms
-from zeus.testing.precision import (
+from dffa.dist_attn_runtime_mgr import DistAttnRuntimeMgr
+from dffa.testing import parameterize
+from dffa.testing.dist_common import DistTestBase, with_comms
+from dffa.testing.precision import (
     EPSILON,
     calc_inf_norm,
     extract_mismatch_info,
@@ -30,7 +30,7 @@ from zeus.testing.precision import (
 )
 
 # tell if using profile mode
-profile_mode = os.environ.get("ZEUS_UNITEST_PROFILE_MODE", "0") == "1"
+profile_mode = os.environ.get("DFFA_UNITEST_PROFILE_MODE", "0") == "1"
 
 PROFILE_ONLY = "profile_only"
 NAME = "name"
@@ -618,7 +618,7 @@ class TestPipelineBase(DistTestBase):
         dv_rtol = {torch.bfloat16: 0.05, torch.float16: 0.05}.get(dtype, 0.05)
 
         mismatch_thres_ratio: float = (
-            2.0  # NOTE: an experimental value from zeus testing
+            2.0  # NOTE: an experimental value from dffa testing
         )
         norm_rtol_ratio: float = 2.0  # NOTE: an experimental value from fa testing
 
@@ -700,7 +700,7 @@ class TestPipelineBase(DistTestBase):
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
 
-        zeus.testing.assert_close(
+        dffa.testing.assert_close(
             total_out,
             total_out_ref_high_precision,
             atol=o_atol,
@@ -731,7 +731,7 @@ class TestPipelineBase(DistTestBase):
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
 
-        zeus.testing.assert_close(
+        dffa.testing.assert_close(
             grad_total_q,
             grad_total_q_ref_high_precision,
             atol=dq_atol,
@@ -762,7 +762,7 @@ class TestPipelineBase(DistTestBase):
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
 
-        zeus.testing.assert_close(
+        dffa.testing.assert_close(
             grad_total_k,
             grad_total_k_ref_high_precision,
             atol=dk_atol,
@@ -793,7 +793,7 @@ class TestPipelineBase(DistTestBase):
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
 
-        zeus.testing.assert_close(
+        dffa.testing.assert_close(
             grad_total_v,
             grad_total_v_ref_high_precision,
             atol=dv_atol,

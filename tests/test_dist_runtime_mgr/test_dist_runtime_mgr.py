@@ -6,15 +6,15 @@ from flash_attn_interface import flex_flash_attn_func
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-import zeus
-import zeus.testing
-from zeus import init_dist_attn_runtime_mgr
-from zeus.common.enum import AttnMaskType
-from zeus.common.ranges import AttnRanges
-from zeus.config import DistAttnConfig
-from zeus.meta.collection.calc_meta import AttnArg
-from zeus.testing import parameterize
-from zeus.testing.dist_common import DistTestBase, with_comms
+import dffa
+import dffa.testing
+from dffa import init_dist_attn_runtime_mgr
+from dffa.common.enum import AttnMaskType
+from dffa.common.ranges import AttnRanges
+from dffa.config import DistAttnConfig
+from dffa.meta.collection.calc_meta import AttnArg
+from dffa.testing import parameterize
+from dffa.testing.dist_common import DistTestBase, with_comms
 
 
 class TestDistAttnRuntimeMgr(DistTestBase):
@@ -200,7 +200,7 @@ class TestDistAttnRuntimeMgr(DistTestBase):
 
         total_o = dist_attn_runtime_mgr.undispatch_qo(local_o)
 
-        zeus.testing.assert_close(
+        dffa.testing.assert_close(
             total_o,
             total_o_ref,
         )
@@ -218,7 +218,7 @@ class TestDistAttnRuntimeMgr(DistTestBase):
             **total_xattn_attn_arg.to_ffa_args(),
         )
 
-        zeus.testing.assert_close(
+        dffa.testing.assert_close(
             total_o,
             total_o_ref,
         )

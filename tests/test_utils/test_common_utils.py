@@ -3,7 +3,7 @@ from unittest import TestCase
 
 import torch
 
-from zeus.utils import (
+from dffa.utils import (
     flatten_nested_list,
     is_list_type_all,
     is_list_value_all,

@@ -1,7 +1,7 @@
 import torch.distributed as dist
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.testing.dist_common import DistTestBase
+from dffa.testing.dist_common import DistTestBase
 
 
 class TestScatterV(DistTestBase):

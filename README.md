@@ -1,7 +1,7 @@
-# Zeus(A super fast distributed attention solver)
+# Distributed Flex-Flash-Attention (A super fast distributed attention solver)
 
 <div align="center">
-  <img src="./assets/zeus_logo.png" alt="Logo" width="1000">
+  <img src="./assets/dffa_logo.png" alt="Logo" width="1000">
 </div>
 
 
@@ -24,15 +24,15 @@
     ```
 
 
-### Step2: install zeus with other submodules
+### Step2: install dffa with other submodules
 
 * command:
 
     ```bash
-    # 1-1. install zeus for developer
+    # 1-1. install dffa for developer
     pip install -e .
 
-    # 1-2. or, install zeus for user
+    # 1-2. or, install dffa for user
     make refresh
 
     # 2. clone submodules including ffa

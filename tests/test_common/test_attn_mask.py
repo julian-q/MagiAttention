@@ -5,10 +5,10 @@ from unittest import TestCase
 import numpy as np
 import torch
 
-from zeus.common.enum import AttnMaskType
-from zeus.common.mask import AttnMask, make_causal_mask
-from zeus.common.range import AttnRange
-from zeus.common.ranges import AttnRanges
+from dffa.common.enum import AttnMaskType
+from dffa.common.mask import AttnMask, make_causal_mask
+from dffa.common.range import AttnRange
+from dffa.common.ranges import AttnRanges
 
 
 class TestAttnMask(TestCase):

@@ -4,9 +4,9 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.comm.primitive import all_gather_v
-from zeus.comm.primitive.utils import _get_dims_as_trans_with_dim0, _trans_with_dim0
-from zeus.testing.dist_common import DistTestBase, with_comms
+from dffa.comm.primitive import all_gather_v
+from dffa.comm.primitive.utils import _get_dims_as_trans_with_dim0, _trans_with_dim0
+from dffa.testing.dist_common import DistTestBase, with_comms
 
 
 class TestAllgatherV(DistTestBase):

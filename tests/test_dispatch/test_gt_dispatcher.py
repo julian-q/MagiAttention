@@ -1,11 +1,11 @@
 import unittest
 from unittest import TestCase
 
-from zeus.common.enum import AttnMaskType
-from zeus.common.mask import AttnMask
-from zeus.common.ranges import AttnRanges
-from zeus.config import MinHeapDispatchAlg
-from zeus.testing.gt_dispatcher import GroundTruthDispatcher
+from dffa.common.enum import AttnMaskType
+from dffa.common.mask import AttnMask
+from dffa.common.ranges import AttnRanges
+from dffa.config import MinHeapDispatchAlg
+from dffa.testing.gt_dispatcher import GroundTruthDispatcher
 
 
 class TestGroundTruthDispatcher(TestCase):

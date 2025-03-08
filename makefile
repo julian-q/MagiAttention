@@ -29,10 +29,10 @@ coverage: # FIXME: something is wrong with the 'coverage run', maybe due to mult
 clean:
 	rm -rf __pycache__
 	rm -rf tests/__pycache__
-	rm -rf zeus/__pycache__
-	rm -rf zeus/version.py
+	rm -rf dffa/__pycache__
+	rm -rf dffa/version.py
 	rm -rf build
 	rm -rf dist
-	rm -rf zeus.egg-info
-	rm -rf src/zeus.egg-info
-	pip uninstall -y zeus
+	rm -rf dffa.egg-info
+	rm -rf src/dffa.egg-info
+	pip uninstall -y dffa

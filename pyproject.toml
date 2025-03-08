@@ -4,7 +4,7 @@ build-backend = "build_helper"
 backend-path = ["tools/"]
 
 [project]
-name = "zeus"
+name = "dffa"
 dynamic = ["version"]
 description = "A Super fast distributed attention solver"
 authors = [{name = "littsk", email = "zeweitao630@gmail.com"}, {name = "Strivin", email = "hyp@smail.nju.edu.cn"}]
@@ -19,14 +19,14 @@ classifiers = [
 
 
 [project.urls]
-"Homepage" = "https://github.com/littsk/zeus"
-"Bug Tracker" = "https://github.com/littsk/zeus/issues"
+"Homepage" = "https://github.com/world-sim-dev/dist-flex-flash-attention"
+"Bug Tracker" = "https://github.com/world-sim-dev/dist-flex-flash-attention/issues"
 
 [tool.setuptools]
-packages = ["zeus"]
+packages = ["dffa"]
 
 [tool.setuptools_scm]
-write_to = "zeus/version.py"
+write_to = "dffa/version.py"
 fallback_version = "1.2.0"
 
 [tool.isort]

@@ -7,12 +7,12 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.common.ranges import AttnRanges
-from zeus.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
-from zeus.meta.collection.calc_meta import AttnArg, AttnCalcMeta
-from zeus.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
-from zeus.testing import parameterize
-from zeus.testing.dist_common import DistTestBase, with_comms
+from dffa.common.ranges import AttnRanges
+from dffa.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
+from dffa.meta.collection.calc_meta import AttnArg, AttnCalcMeta
+from dffa.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
+from dffa.testing import parameterize
+from dffa.testing.dist_common import DistTestBase, with_comms
 
 
 # TODO: add more unitest for dist ffa

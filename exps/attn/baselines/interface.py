@@ -3,8 +3,8 @@ from abc import ABC, abstractmethod
 import torch
 import torch.distributed as dist
 
-from zeus.common.enum import AttnMaskType
-from zeus.common.ranges import AttnRanges
+from dffa.common.enum import AttnMaskType
+from dffa.common.ranges import AttnRanges
 
 
 class AttnBaselineInterface(ABC):

@@ -3,13 +3,13 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.common import AttnRanges
-from zeus.common.enum import AttnMaskType
-from zeus.config import DispatchConfig, MinHeapDispatchAlg
-from zeus.functional import dispatch_func, undispatch_func
-from zeus.meta import calc_dispatch_meta_from_qk_ranges
-from zeus.meta._calc_dispatch_meta import cu_seqlens2seqlens, seqlens2cu_seqlens
-from zeus.testing.dist_common import DistTestBase, with_comms
+from dffa.common import AttnRanges
+from dffa.common.enum import AttnMaskType
+from dffa.config import DispatchConfig, MinHeapDispatchAlg
+from dffa.functional import dispatch_func, undispatch_func
+from dffa.meta import calc_dispatch_meta_from_qk_ranges
+from dffa.meta._calc_dispatch_meta import cu_seqlens2seqlens, seqlens2cu_seqlens
+from dffa.testing.dist_common import DistTestBase, with_comms
 
 WORLD_SIZE = 4
 SEED = 42

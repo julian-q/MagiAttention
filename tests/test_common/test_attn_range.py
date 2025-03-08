@@ -1,7 +1,7 @@
 import unittest
 from unittest import TestCase
 
-from zeus.common.range import AttnRange, RangeError
+from dffa.common.range import AttnRange, RangeError
 
 
 class TestAttnRange(TestCase):

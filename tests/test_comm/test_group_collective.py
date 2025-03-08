@@ -7,14 +7,14 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from zeus.comm.primitive import group_cast_collective, group_reduce_collective
-from zeus.comm.primitive.utils import (
+from dffa.comm.primitive import group_cast_collective, group_reduce_collective
+from dffa.comm.primitive.utils import (
     _calc_group_cast_a2a_input_args,
     _calc_group_reduce_a2a_input_args,
     _reduce_to_tensor,
     _unpermute_tensor,
 )
-from zeus.testing.dist_common import DistTestBase, with_comms
+from dffa.testing.dist_common import DistTestBase, with_comms
 
 
 def _seqlens2curanges(
