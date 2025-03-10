@@ -24,7 +24,7 @@
     ```
 
 
-### Step2: install dffa with other submodules
+### Step2: install dffa from source
 
 * command:
 
@@ -34,15 +34,6 @@
 
     # 1-2. or, install dffa for user
     make refresh
-
-    # 2. clone submodules including ffa
-    git submodule update --init --recursive
-
-    # 3-1. get into ffa folder
-    cd third_party/flexible-flash-attention/hopper
-
-    # 3-2. install ffa
-    python setup.py install; cd -
     ```
 
 ### Step3: install other required packages
@@ -50,8 +41,12 @@
 * command:
 
     ```bash
-    # install required packages
+    # 1-1. install required packages for user
     pip install -r requirements.txt
+
+    # 1-2. or, install required packages for developer
+    pip install -r requirements.txt
+    pip install -r requirements_dev.txt
     ```
 
 ### Step4: setup pre-commit (for developer)
