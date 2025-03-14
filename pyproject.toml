@@ -7,7 +7,10 @@ backend-path = ["tools/"]
 name = "dffa"
 dynamic = ["version"]
 description = "A Super fast distributed attention solver"
-authors = [{name = "littsk", email = "zeweitao630@gmail.com"}, {name = "Strivin", email = "hyp@smail.nju.edu.cn"}]
+authors = [
+  {name = "littsk", email = "zeweitao630@gmail.com"},
+  {name = "Strivin", email = "hyp@smail.nju.edu.cn"}
+]
 license = {text = "Apache-2.0"}
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,9 +25,21 @@ classifiers = [
 "Homepage" = "https://github.com/world-sim-dev/dist-flex-flash-attention"
 "Bug Tracker" = "https://github.com/world-sim-dev/dist-flex-flash-attention/issues"
 
+# 关键修改：显式包含所有子包
 [tool.setuptools]
-packages = ["dffa"]
+# 包含非 Python 文件（如 .h 文件）
+include-package-data = true
 
+# 配置 find 的行为
+[tool.setuptools.packages.find]
+where = ["."]  # 从当前目录开始递归查找
+include = ["dffa*", "dffa.*"]  # 强制包含所有 dffa 子包
+
+# 如果有需要包含的非 Python 文件（例如 csrc/ 中的头文件）
+[tool.setuptools.package-data]
+"dffa.csrc" = ["*.h"]  # 示例：包含 csrc 目录下的所有 .h 文件
+
+# setuptools_scm 配置
 [tool.setuptools_scm]
 write_to = "dffa/version.py"
 fallback_version = "1.2.0"

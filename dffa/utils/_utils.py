@@ -140,7 +140,7 @@ def is_list_type_all(
     just_same: bool = False,
     allow_empty: bool = False,
 ) -> bool:
-    if not _list:
+    if len(_list) == 0:
         return allow_empty
 
     if just_same:
