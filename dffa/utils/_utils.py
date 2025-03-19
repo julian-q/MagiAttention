@@ -1,7 +1,7 @@
 import functools
 import os
 import warnings
-from typing import Any, Callable, Sequence, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, Callable, Sequence, TypeAlias, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,6 +10,9 @@ import torch.distributed as dist
 from rich import print as rprint
 
 from . import nvtx
+
+if TYPE_CHECKING:
+    from dffa.common.ranges import NaiveRanges
 
 
 def deprecated(func: Callable) -> Callable:
@@ -227,3 +230,34 @@ def vis_matrix(
 
     if save_path is not None:
         plt.savefig(save_path)
+
+
+def get_attn_mask_from_ranges(
+    q_ranges: "NaiveRanges",
+    k_ranges: "NaiveRanges",
+    is_causal_mapping: list[bool],
+    total_seqlen_q: int,
+    total_seqlen_k: int,
+) -> torch.Tensor:
+    assert is_list_value_all(
+        is_causal_mapping, False
+    ), "For now, we only support full mask for each attn slice"
+
+    bsz = len(q_ranges)
+    mask = torch.zeros(
+        (total_seqlen_q, total_seqlen_k),
+        device=torch.cuda.current_device(),
+        dtype=torch.bool,
+    )
+    for i in range(bsz):
+        mask[q_ranges[i][0] : q_ranges[i][1], k_ranges[i][0] : k_ranges[i][1]] = True
+    return mask
+
+
+def to_higher_fp_dtype(
+    tensor: torch.Tensor,
+    lowest_precision: torch.dtype,
+) -> torch.Tensor:
+    if torch.finfo(tensor.dtype).bits < torch.finfo(lowest_precision).bits:
+        return tensor.to(lowest_precision)
+    return tensor

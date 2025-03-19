@@ -216,12 +216,20 @@ class TestAttnRanges(TestCase):
         self.assertTrue(sorted_ranges.is_sorted())
 
     def test_merge(self):
+        # case1
         ranges = AttnRanges.from_ranges(
             [(0, 10), (10, 20), (20, 30), (30, 35), (40, 50)]
         )
         self.assertFalse(ranges.is_merged())
         merged_ranges = ranges.merge()
         self.assertEqual(merged_ranges, AttnRanges.from_ranges([(0, 35), (40, 50)]))
+        self.assertTrue(merged_ranges.is_merged())
+
+        # case2
+        ranges = AttnRanges.from_ranges([(0, 10), (6, 8)])
+        self.assertFalse(ranges.is_merged())
+        merged_ranges = ranges.merge()
+        self.assertEqual(merged_ranges, AttnRanges.from_ranges([(0, 10)]))
         self.assertTrue(merged_ranges.is_merged())
 
     def test_non_overlap(self):

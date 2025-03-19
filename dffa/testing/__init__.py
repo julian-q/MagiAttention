@@ -3,13 +3,12 @@ from typing import Any, Callable
 
 from . import dist_common
 from .gt_dispatcher import GroundTruthDispatcher
-from .precision import EPSILON, assert_close, get_mask_from_ranges, torch_attn_ref
+from .precision import EPSILON, assert_close, torch_attn_ref
 
 __all__ = [
     "dist_common",
     "GroundTruthDispatcher",
     "assert_close",
-    "get_mask_from_ranges",
     "torch_attn_ref",
     "parameterize",
     "EPSILON",

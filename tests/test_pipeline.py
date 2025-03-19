@@ -25,9 +25,9 @@ from dffa.testing.precision import (
     EPSILON,
     calc_inf_norm,
     extract_mismatch_info,
-    get_mask_from_ranges,
     torch_attn_ref,
 )
+from dffa.utils import get_attn_mask_from_ranges
 
 # tell if using profile mode
 profile_mode = os.environ.get("DFFA_UNITEST_PROFILE_MODE", "0") == "1"
@@ -77,7 +77,7 @@ INTER_NODE_COMM_COST_FACTOR = (
 )
 
 
-class TestPipelineBase(DistTestBase):
+class TestPipelineBaseWithWorldSize1(DistTestBase):
     def init_pg(self) -> None:
         super().init_pg()
 
@@ -113,24 +113,15 @@ class TestPipelineBase(DistTestBase):
 
     @with_comms
     @parameterize(
-        # TODO:
-        # 1. test more diverse and complicated attn mask
+        # TODO: test more diverse and complicated attn mask
         "attn_config",
         [
             # full attn with total seqlen 14k
             {
                 NAME: "full_attn_14k",
                 SKIP_WORLD_SIZE: [3, 5, 6, 8],
-                "q_ranges": AttnRanges.from_ranges(
-                    [
-                        [0, 14336],
-                    ]
-                ),
-                "k_ranges": AttnRanges.from_ranges(
-                    [
-                        [0, 14336],
-                    ]
-                ),
+                "q_ranges": AttnRanges.from_ranges([[0, 14336]]),
+                "k_ranges": AttnRanges.from_ranges([[0, 14336]]),
                 "is_causal_mapping": [False],
                 "total_seqlen_q": 14336,
                 "total_seqlen_k": 14336,
@@ -602,7 +593,7 @@ class TestPipelineBase(DistTestBase):
         grad_total_out: torch.Tensor,
         dtype: torch.dtype,
         test_case: str = "",
-    ):
+    ) -> None:
         # -----   customize tolerance threshold  ---- #
 
         o_atol = EPSILON
@@ -624,12 +615,12 @@ class TestPipelineBase(DistTestBase):
 
         # -----   build attn mask   ---- #
 
-        mask = get_mask_from_ranges(
+        mask = get_attn_mask_from_ranges(
             q_ranges=q_ranges.to_naive_ranges(),
             k_ranges=k_ranges.to_naive_ranges(),
-            q_len=total_seqlen_q,
-            k_len=total_seqlen_k,
             is_causal_mapping=is_causal_mapping,
+            total_seqlen_q=total_seqlen_q,
+            total_seqlen_k=total_seqlen_k,
         )
 
         # -----   ref1. torch ref with high precision (fp32)   ---- #
@@ -820,17 +811,7 @@ class TestPipelineBase(DistTestBase):
         return min(max(mismatch_threshold_ref * mismatch_thres_ratio, 0.0), 1.0)
 
 
-class TestPipelineWithWorldSize1(TestPipelineBase):
-    @property
-    def world_size(self) -> int:
-        return 1
-
-    @skip_if_lt_x_gpu(1)
-    def test_pipeline(self, *args, **kwargs):
-        super().test_pipeline(*args, **kwargs)
-
-
-class TestPipelineWithWorldSize2(TestPipelineBase):
+class TestPipelineWithWorldSize2(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 2
@@ -840,7 +821,7 @@ class TestPipelineWithWorldSize2(TestPipelineBase):
         super().test_pipeline(*args, **kwargs)
 
 
-class TestPipelineWithWorldSize3(TestPipelineBase):
+class TestPipelineWithWorldSize3(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 3
@@ -850,7 +831,7 @@ class TestPipelineWithWorldSize3(TestPipelineBase):
         super().test_pipeline(*args, **kwargs)
 
 
-class TestPipelineWithWorldSize4(TestPipelineBase):
+class TestPipelineWithWorldSize4(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 4
@@ -860,7 +841,7 @@ class TestPipelineWithWorldSize4(TestPipelineBase):
         super().test_pipeline(*args, **kwargs)
 
 
-class TestPipelineWithWorldSize5(TestPipelineBase):
+class TestPipelineWithWorldSize5(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 5
@@ -870,7 +851,7 @@ class TestPipelineWithWorldSize5(TestPipelineBase):
         super().test_pipeline(*args, **kwargs)
 
 
-class TestPipelineWithWorldSize6(TestPipelineBase):
+class TestPipelineWithWorldSize6(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 6
@@ -880,7 +861,7 @@ class TestPipelineWithWorldSize6(TestPipelineBase):
         super().test_pipeline(*args, **kwargs)
 
 
-class TestPipelineWithWorldSize7(TestPipelineBase):
+class TestPipelineWithWorldSize7(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 7
@@ -890,7 +871,7 @@ class TestPipelineWithWorldSize7(TestPipelineBase):
         super().test_pipeline(*args, **kwargs)
 
 
-class TestPipelineWithWorldSize8(TestPipelineBase):
+class TestPipelineWithWorldSize8(TestPipelineBaseWithWorldSize1):
     @property
     def world_size(self) -> int:
         return 8

@@ -81,7 +81,7 @@ class DistAttnRuntimeMgr:
 
     def calc_attn(
         self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         return dist_attn_func(q, k, v, self.dist_attn_runtime)
 
     def get_xattn_args(

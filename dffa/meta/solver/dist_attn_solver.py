@@ -507,6 +507,9 @@ class DistAttnSolver:
             self.overlap_chunk_size = (
                 total_remote_k_seqlen + self.overlap_num_chunks - 1
             ) // self.overlap_num_chunks
+            self.overlap_num_chunks = (
+                total_remote_k_seqlen + self.overlap_chunk_size - 1
+            ) // self.overlap_chunk_size
 
         # chunk the remote k ranges global for multi-stage overlapping
         remote_k_ranges_global_per_chunk: list[

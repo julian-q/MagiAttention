@@ -7,36 +7,17 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from flash_attn_interface import _flex_flash_attn_backward, _flex_flash_attn_forward
 
+import dffa
 from dffa.comm.primitive import group_cast_collective, group_reduce_collective
 from dffa.comm.work import WorkWithPostProcessFn
 from dffa.common.ranges import NaiveRanges
 from dffa.meta.collection import AttnCalcMeta, CommMeta
-from dffa.utils import nvtx
+from dffa.utils import nvtx, to_higher_fp_dtype
+
+from .sdpa import sdpa_bwd, sdpa_fwd
+from .utils import safe_subtract
 
 logger = getLogger("dffa")
-
-
-@nvtx.instrument_nvtx
-def safe_subtract(
-    a: torch.Tensor,
-    b: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Safely subtracts two tensors. where the subtraction results of two -inf will be set to -inf.
-    """
-
-    eq = (a == b) & (a == float("-inf"))
-    sub = a - b
-    sub = torch.where(eq, torch.fill(sub, float("-inf")), sub)
-
-    # A faster way to do the same thing as the above
-    # neg_inf = (a == b) & (a == float("-inf"))
-    # not_neg_inf = torch.logical_not(neg_inf)
-    # b_not_neg_inf = b * not_neg_inf.float()
-    # sub_comp = a - b_not_neg_inf
-
-    # assert torch.testing.assert_close(sub, sub_comp)
-    return sub
 
 
 @nvtx.instrument_nvtx
@@ -55,14 +36,16 @@ def correct_attn_lse(
     Returns:
         lse(torch.Tensor): corrected log sum exp tensor, with shape: [batch_size, num_heads, seq_len]
     """
-    min_lse = torch.min(lse1, lse2).to(torch.float32)
-    max_lse = torch.max(lse1, lse2).to(torch.float32)
 
-    # formula: lse = log(exp(lse1) + exp(lse2))
-    #              = lse1 + log(1 + exp(lse2 - lse1))
-    #              = max_lse + log(1 + exp(min_lse - max_lse))
-    #              = max_lse + log1p(exp(min_lse - max_lse))
-    #              = max_lse + softplus(min_lse - max_lse)
+    min_lse = to_higher_fp_dtype(torch.min(lse1, lse2), torch.float32)
+    max_lse = to_higher_fp_dtype(torch.max(lse1, lse2), torch.float32)
+
+    # formula derivation:
+    # lse = log(exp(lse1) + exp(lse2))
+    #     = lse1 + log(1 + exp(lse2 - lse1))
+    #     = max_lse + log(1 + exp(min_lse - max_lse))
+    #     = max_lse + log1p(exp(min_lse - max_lse))
+    #     = max_lse + softplus(min_lse - max_lse)
     lse = max_lse + F.softplus(safe_subtract(min_lse, max_lse))
 
     return lse.to(lse1.dtype)
@@ -93,7 +76,10 @@ def correct_attn_output(
     # formula: lsei_ = exp(lsei - lse)
     # shape: [b, h, s] -> [b, s, h] -> [b, s, h, 1]
     lse1_, lse2_ = [
-        safe_subtract(lsei, lse).exp().transpose(-1, -2).unsqueeze(-1).to(torch.float32)
+        to_higher_fp_dtype(
+            safe_subtract(lsei, lse).exp().transpose(-1, -2).unsqueeze(-1),
+            torch.float32,
+        )
         for lsei in [lse1, lse2]
     ]
 
@@ -301,31 +287,49 @@ class DistFlashAttnRuntime:
 
         # 计算attn
         if attn_arg.skip_attn:
-            num_tokens, num_heads, head_dim = q.shape
             out = torch.zeros_like(q)
-            lse = (
-                torch.ones(
-                    [num_heads, num_tokens], dtype=torch.float32, device=q.device
-                )
-                * -torch.inf
+            if len(q.shape) == 3:
+                num_tokens_q, num_heads, _ = q.shape
+            elif len(q.shape) == 4:
+                batch_size, num_heads, num_tokens_q, _ = q.shape
+
+            lse = to_higher_fp_dtype(
+                torch.full(
+                    [num_heads, num_tokens_q]
+                    if len(q.shape) == 3
+                    else [batch_size, num_heads, num_tokens_q],
+                    fill_value=-torch.inf,
+                    dtype=torch.float32,
+                    device=q.device,
+                ),
+                q.dtype,
             )
         else:
             k, v = self.chunk_kv(kv)
-            with nvtx.add_nvtx_event(
-                f"attn-fwd: area={attn_arg.total_area} | qr={attn_arg.q_ranges} | kr={attn_arg.k_ranges}"
-            ):
-                out, _, _, _, _, lse = _flex_flash_attn_forward(
-                    q=q,
-                    k=k,
-                    v=v,
-                    **attn_arg.to_ffa_args(),
-                    softmax_scale=q.shape[-1] ** (-0.5),
-                    deterministic=deterministic,
+            if dffa.is_sdpa_backend_enable():
+                out, lse = sdpa_fwd(
+                    q,
+                    k,
+                    v,
+                    attn_arg=attn_arg,
                 )
+            else:
+                with nvtx.add_nvtx_event(
+                    f"attn-fwd: area={attn_arg.total_area} | "
+                    f"qr={attn_arg.q_ranges} | kr={attn_arg.k_ranges}"
+                ):
+                    out, _, _, _, _, lse = _flex_flash_attn_forward(
+                        q=q,
+                        k=k,
+                        v=v,
+                        **attn_arg.to_ffa_args(),
+                        softmax_scale=q.shape[-1] ** -0.5,
+                        deterministic=deterministic,
+                    )
 
-            # fill output with zero indexed by "hole" q ranges
-            # TODO: put this logic into kernel
-            out_zero_fill_correction(out, attn_arg.out_zero_fill_ranges)
+                # fill output with zero indexed by "hole" q ranges
+                # TODO: put this logic into kernel
+                out_zero_fill_correction(out, attn_arg.out_zero_fill_ranges)
 
         return out, lse
 
@@ -347,32 +351,44 @@ class DistFlashAttnRuntime:
         else:
             attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
 
-        # FIXME: here q needs to use 'zeros_like' to initialize
-        # since ffa only zero those covered by q_ranges
-        # needed to be fixed by ffa kernel in the future
-        partial_dq = torch.zeros_like(q)
-        partial_dkv = torch.empty_like(kv)
-
-        k, v = self.chunk_kv(kv)
-        partial_dk, partial_dv = self.chunk_kv(partial_dkv)
-
         if attn_arg.skip_attn:
-            partial_dkv.fill_(0)
+            partial_dq = torch.zeros_like(q)
+            partial_dkv = torch.zeros_like(kv)
         else:
-            partial_dq, partial_dk, partial_dv, _ = _flex_flash_attn_backward(
-                dout=do,
-                q=q,
-                k=k,
-                v=v,
-                out=o,
-                softmax_lse=lse,
-                dq=partial_dq,
-                dk=partial_dk,
-                dv=partial_dv,
-                **attn_arg.to_ffa_args(),
-                softmax_scale=q.shape[-1] ** (-0.5),
-                deterministic=deterministic,
-            )
+            k, v = self.chunk_kv(kv)
+            if dffa.is_sdpa_backend_enable():
+                partial_dq, partial_dk, partial_dv = sdpa_bwd(
+                    do=do,
+                    q=q,
+                    k=k,
+                    v=v,
+                    o=o,
+                    lse=lse,
+                    attn_arg=attn_arg,
+                )
+                partial_dkv = torch.cat([partial_dk, partial_dv], dim=0)
+            else:
+                # FIXME: here q needs to use 'zeros_like' to initialize
+                # since ffa only zero those covered by q_ranges
+                # needed to be fixed by ffa kernel in the future
+                partial_dq = torch.zeros_like(q)
+                partial_dkv = torch.empty_like(kv)
+                partial_dk, partial_dv = self.chunk_kv(partial_dkv)
+
+                partial_dq, partial_dk, partial_dv, _ = _flex_flash_attn_backward(
+                    dout=do,
+                    q=q,
+                    k=k,
+                    v=v,
+                    out=o,
+                    softmax_lse=lse,
+                    dq=partial_dq,
+                    dk=partial_dk,
+                    dv=partial_dv,
+                    **attn_arg.to_ffa_args(),
+                    softmax_scale=q.shape[-1] ** -0.5,
+                    deterministic=deterministic,
+                )
 
         return partial_dq, partial_dkv
 

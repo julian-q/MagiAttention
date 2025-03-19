@@ -6,8 +6,6 @@ from einops import rearrange
 from packaging import version
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from dffa.common.ranges import NaiveRanges
-
 if version.parse(torch.__version__) > version.parse("2.4"):
     # NOTE: in testing, we should explicitly allow bf16/fp16 reduction for sdpa
     # by setting `torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)`
@@ -45,8 +43,8 @@ def assert_close(
     try:
         torch.testing.assert_close(a, b, atol=atol, rtol=rtol)
     except AssertionError as e:
-        error_msg = str(e)
         if mismatch_threshold > 0:
+            error_msg = str(e)
             mismatched_elements, total_elements, mismatch_ratio = extract_mismatch_info(
                 error_msg
             )
@@ -59,28 +57,13 @@ def assert_close(
             if mismatch_ratio <= mismatch_threshold:
                 print(mismatch_info)
                 return
-        raise type(e)(
-            f"\n>>>>>>>  Torch Error Message: \n\n{error_msg}\n\n"
-            f">>>>>>>  Mismatch Detailed Info: \n\n{mismatch_info}\n\n"
-        ) from e
+            else:
+                raise type(e)(
+                    f"\n>>>>>>>  Torch Error Message: \n\n{error_msg}\n\n"
+                    f">>>>>>>  Mismatch Detailed Info: \n\n{mismatch_info}\n\n"
+                ) from e
 
-
-def get_mask_from_ranges(
-    q_ranges: NaiveRanges,
-    k_ranges: NaiveRanges,
-    q_len: int,
-    k_len: int,
-    is_causal_mapping: list[bool],
-) -> torch.Tensor:
-    assert all((is_causal is False) for is_causal in is_causal_mapping)
-
-    bsz = len(q_ranges)
-    mask = torch.zeros(
-        (q_len, k_len), device=torch.cuda.current_device(), dtype=torch.bool
-    )
-    for i in range(bsz):
-        mask[q_ranges[i][0] : q_ranges[i][1], k_ranges[i][0] : k_ranges[i][1]] = True
-    return mask
+        raise e
 
 
 def calc_inf_norm(

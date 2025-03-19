@@ -60,4 +60,19 @@ __all__ = [
 
 
 def is_sanity_check_enable() -> bool:
+    """
+    Toggling this env variable to 1 can enable many sanity check codes inside dffa
+    which is only supposed to be used for testing or debugging,
+    since these codes involve performance overhead
+    """
     return os.environ.get("DFFA_SANITY_CHECK", "0") == "1"
+
+
+def is_sdpa_backend_enable() -> bool:
+    """
+    Toggling this env variable to 1 can switch the attn kernel backend
+    from ffa to sdpa-math, to support higher precision like fp32, fp64,
+    which is only supposed to be used for testing or debugging,
+    since the performance is not acceptable
+    """
+    return os.environ.get("DFFA_SDPA_BACKEND", "0") == "1"
