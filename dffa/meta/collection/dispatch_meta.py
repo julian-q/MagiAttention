@@ -32,20 +32,39 @@ class DispatchMeta:
     cp_size: int
 
     seqlens: list[int]
-    seqlens_permed: list[int]
-    seqlens_perm_idxs: list[int]
-    seqlens_unperm_idxs: list[int]
+    seqlens_permed: list[int]  # unused property
+    seqlens_perm_idxs: list[int]  # unused property
+    seqlens_unperm_idxs: list[int]  # unused property
 
-    cu_seqlens: list[int]
-    cu_seqlens_permed: list[int]
+    cu_seqlens: list[int]  # unused property
+    cu_seqlens_permed: list[int]  # unused property
 
+    # dispatch solver results
     partitions: list[list[int]]
     partitions_perm_idxs: list[int]
     partitions_unperm_idxs: list[int]
 
     global_bucket: AttnBucket
     buckets_per_rank: list[AttnBucket]
-    host_ranges_per_rank: list[AttnRanges]
+
+    high_bandwith_domain_size: int
+
+    @property
+    def host_ranges_per_rank(self) -> list[AttnRanges]:
+        return [bucket.q_ranges for bucket in self.buckets_per_rank]
+
+    @property
+    def host_ranges_this_domain(self) -> AttnRanges:
+        ans = AttnRanges()
+        domain_rank = self.cp_rank // self.high_bandwith_domain_size
+        bucket_per_domain = self.buckets_per_rank[
+            domain_rank
+            * self.high_bandwith_domain_size : (domain_rank + 1)
+            * self.high_bandwith_domain_size
+        ]
+        for bucket in bucket_per_domain:
+            ans.extend(bucket.q_ranges)
+        return ans
 
     def __post_init__(self) -> None:
         assert len(self.seqlens) == len(self.seqlens_permed) == self.batch_size

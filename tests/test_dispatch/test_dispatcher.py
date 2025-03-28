@@ -79,6 +79,7 @@ class TestDispatcher(DistTestBase):
 
         # --------------      compute meta       -------------- #
 
+        assert self.world_size % 2 == 0
         meta_q, meta_k, buckets_per_rank = calc_dispatch_meta_from_qk_ranges(
             q_ranges=q_ranges,
             k_ranges=k_ranges,
@@ -92,6 +93,7 @@ class TestDispatcher(DistTestBase):
             is_same_source=is_same_source,
             is_q_permutable=is_q_permutable,
             is_k_permutable=is_k_permutable,
+            high_bandwith_domain_size=self.world_size // 2,
         )
 
         self.assertEqual(len(buckets_per_rank), cp_size)

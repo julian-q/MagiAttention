@@ -95,7 +95,7 @@ def result_correction(
     lse_list: list[torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    对attn结果进行correction
+    Corrects the attention result.
 
     Args:
         out_list(list[torch.Tensor]):
@@ -109,6 +109,10 @@ def result_correction(
         - out: [num_tokens_q, num_heads, head_dim]
         - lse: [num_heads, num_tokens_q]
     """
+    if len(lse_list) == 1:
+        # NOTE: if there is only one out and lse, we just return them directly, no need to correct
+        return out_list[0], lse_list[0]
+
     curr_lse = None
     curr_out = None
 
@@ -147,24 +151,18 @@ def out_zero_fill_correction(
 
 class DistFlashAttnRuntime:
     """
-    分布式Flash Attention的运行时类。
+    Runtime class for Distributed Flash Attention.
 
     Args:
-        config (DistFlashAttnConfig): 分布式Flash Attention的静态配置
-        runtime_meta (DistFlashAttnRuntimeMeta): 分布式Flash Attention的运行时元数据
+        config (DistFlashAttnConfig): Static configuration for distributed Flash Attention
+        runtime_meta (DistFlashAttnRuntimeMeta): Runtime metadata for distributed Flash Attention
 
 
-    NOTE(xiaowu):
-        每一次forward都需要实例化一个DistFlashAttnRuntime
-        这个runtime实例需要做以下事情:
-        初始化时:
-            - 申请remote kv buffer, 每一层都会复用
-            - 将remote kv buffer提前切分, 减少每层slice的cpu overhead
-
-        为每一层forward提供可供调度的原语:
-            - fetch_remote_kv: 将remote kv buffer从其他rank拉取到本地
-            - do_attn_partially: 计算attn结果的一部分
-            - result_correction: 对attn结果进行correction
+    NOTE:
+        A new DistFlashAttnRuntime should be instantiated for each forward pass
+        This runtime instance provides schedulable primitives for each layer's forward pass:
+            - fetch_remote_kv: Fetch remote kv buffer from other ranks to local
+            - do_attn_partially: Compute part of the attention result
     """
 
     def __init__(
@@ -197,15 +195,15 @@ class DistFlashAttnRuntime:
         overlap_stage: int,
     ) -> tuple[WorkWithPostProcessFn, torch.Tensor]:
         """
-        将remote kv buffer从其他rank拉取到本地, 并返回对应的Work和对应的buffer
+        Fetch remote kv buffer from other ranks to local, and return the corresponding Work and buffer
 
         Args:
             local_kv(torch.Tensor): the concatenated local kv tensor
-            overlap_stage(int): 当前的overlap stage
+            overlap_stage(int): current overlap stage
 
         Returns:
-            remote_kv_work(WorkWithPostProcessFn): 通信handle, 用于等待通信完成
-            remote_kv_buffer(torch.Tensor): 远程kv buffer
+            remote_kv_work(WorkWithPostProcessFn): communication handle, used to wait for communication completion
+            remote_kv_buffer(torch.Tensor): remote kv buffer
 
         Shape:
             - local_kv: [num_tokens_kv_local, num_heads, head_dim]
@@ -251,26 +249,27 @@ class DistFlashAttnRuntime:
         kv: torch.Tensor,
         overlap_stage: Optional[int] = None,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, bool]:
         """
-        计算attn结果的一部分
+        Compute a part of the attention result
 
         Args:
             q(torch.Tensor):
             kv(torch.Tensor):
-            overlap_stage(Optional[int]): 当前的overlap stage,
-                如果为None, 则表示是local的attn, 否则表示是remote的attn
+            overlap_stage(Optional[int]): Current overlap stage,
+                if None, it means local attention, otherwise it means remote attention
+            deterministic(bool): Whether to use deterministic algorithm
 
         Returns:
-            out(torch.Tensor):
+            out(torch.Tensor): attention result
             lse(torch.Tensor): log sum exp
-
+            skip_attn(bool): Whether to skip attention computation,
+                NOTE: if True, the out and lse will be random initialized
         Shape:
             - q: [num_tokens_q, num_heads, head_dim]
             - kv: [num_tokens_kv, num_heads, head_dim]
             - out: [num_tokens_q, num_heads, head_dim]
             - lse: [num_heads, num_tokens_q]
-            REVIEW(xiaowu): 这里lse的shape是否正确?
         """
 
         if overlap_stage is None:
@@ -287,18 +286,12 @@ class DistFlashAttnRuntime:
 
         # 计算attn
         if attn_arg.skip_attn:
-            out = torch.zeros_like(q)
-            if len(q.shape) == 3:
-                num_tokens_q, num_heads, _ = q.shape
-            elif len(q.shape) == 4:
-                batch_size, num_heads, num_tokens_q, _ = q.shape
+            out = torch.empty_like(q)
+            num_tokens_q, num_heads, _ = q.shape
 
             lse = to_higher_fp_dtype(
-                torch.full(
-                    [num_heads, num_tokens_q]
-                    if len(q.shape) == 3
-                    else [batch_size, num_heads, num_tokens_q],
-                    fill_value=-torch.inf,
+                torch.empty(
+                    [num_heads, num_tokens_q],
                     dtype=torch.float32,
                     device=q.device,
                 ),
@@ -331,7 +324,7 @@ class DistFlashAttnRuntime:
                 # TODO: put this logic into kernel
                 out_zero_fill_correction(out, attn_arg.out_zero_fill_ranges)
 
-        return out, lse
+        return out, lse, attn_arg.skip_attn
 
     @nvtx.instrument_nvtx
     def attn_bwd_partial(
@@ -343,8 +336,14 @@ class DistFlashAttnRuntime:
         lse: torch.Tensor,
         overlap_stage: Optional[int] = None,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply ffa bwd kernel to get partial dqkv."""
+    ) -> tuple[torch.Tensor, torch.Tensor, bool]:
+        """Apply ffa bwd kernel to get partial dqkv.
+        Returns:
+            partial_dq(torch.Tensor): partial dq
+            partial_dkv(torch.Tensor): partial dkv
+            skip_attn(bool): Whether to skip attention computation,
+                NOTE: if True, the partial_dq and partial_dkv will be random initialized
+        """
 
         if overlap_stage is None:
             attn_arg = self.calc_meta.local_attn_arg
@@ -352,8 +351,7 @@ class DistFlashAttnRuntime:
             attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
 
         if attn_arg.skip_attn:
-            partial_dq = torch.zeros_like(q)
-            partial_dkv = torch.zeros_like(kv)
+            partial_dq, partial_dkv = torch.empty_like(q), torch.empty_like(kv)
         else:
             k, v = self.chunk_kv(kv)
             if dffa.is_sdpa_backend_enable():
@@ -390,7 +388,7 @@ class DistFlashAttnRuntime:
                     deterministic=deterministic,
                 )
 
-        return partial_dq, partial_dkv
+        return partial_dq, partial_dkv, attn_arg.skip_attn
 
     @nvtx.instrument_nvtx
     def reduce_partial_dkv(
@@ -450,7 +448,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
         dist_attn_runtime: DistFlashAttnRuntime,
     ):
         """
-        分布式Flash Attention的forward函数
+        Distributed Flash Attention forward function
 
         Args:
             local_q(torch.Tensor):
@@ -481,14 +479,15 @@ class DistFlashAttnFunc(torch.autograd.Function):
 
         # do attn fwd with local kv
         # overlapped with 0th remote kv comm
-        out, lse = dist_attn_runtime.attn_fwd_partial(
+        out, lse, skip_attn = dist_attn_runtime.attn_fwd_partial(
             q=local_q,
             kv=local_kv,
             overlap_stage=None,
             deterministic=dist_attn_runtime.deterministic,
         )
-        out_list.append(out)
-        lse_list.append(lse)
+        if not skip_attn:
+            out_list.append(out)
+            lse_list.append(lse)
 
         for ith_overlap_stage in range(dist_attn_runtime.overlap_degree):
             # wait for ith remote kv prepared
@@ -505,15 +504,15 @@ class DistFlashAttnFunc(torch.autograd.Function):
 
             # do attn fwd with ith remote kv
             # overlapped with (i+1)th remote kv comm
-            out, lse = dist_attn_runtime.attn_fwd_partial(
+            out, lse, skip_attn = dist_attn_runtime.attn_fwd_partial(
                 q=local_q,
                 kv=curr_remote_kv,
                 overlap_stage=ith_overlap_stage,
                 deterministic=dist_attn_runtime.deterministic,
             )
-
-            out_list.append(out)
-            lse_list.append(lse)
+            if not skip_attn:
+                out_list.append(out)
+                lse_list.append(lse)
 
         # do result correction to get final out and lse
         out, lse = result_correction(
@@ -542,6 +541,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
         (
             partial_local_dq,
             partial_local_dkv,
+            skip_attn,
         ) = dist_attn_runtime.attn_bwd_partial(
             do=grad_output,
             q=local_q,
@@ -551,6 +551,11 @@ class DistFlashAttnFunc(torch.autograd.Function):
             overlap_stage=None,
             deterministic=dist_attn_runtime.deterministic,
         )
+
+        if skip_attn:
+            # NOTE: if local_dq and local_dkv calculation are skipped, we need to zeros initialize them.
+            partial_local_dq = torch.zeros_like(local_q)
+            partial_local_dkv = torch.zeros_like(local_kv)
 
         partial_local_dkv_work = WorkWithPostProcessFn()
         for ith_overlap_stage in range(dist_attn_runtime.overlap_degree):
@@ -571,6 +576,7 @@ class DistFlashAttnFunc(torch.autograd.Function):
             (
                 partial_remote_dq,
                 partial_remote_dkv,
+                skip_attn,
             ) = dist_attn_runtime.attn_bwd_partial(
                 do=grad_output,
                 q=local_q,
@@ -582,18 +588,22 @@ class DistFlashAttnFunc(torch.autograd.Function):
             )
 
             # reduce ith partial dkv
+            # NOTE: Even if skip_attn is True, we still need to launch the group_reduce_collective,
+            #       because not all ranks are skipped.
             partial_local_dkv_work_new = dist_attn_runtime.reduce_partial_dkv(
                 partial_remote_dkv=partial_remote_dkv,
                 partial_local_dkv=partial_local_dkv,
                 overlap_stage=ith_overlap_stage,
             )
 
-            # reduce ith partial dq
-            # overlapped with ith remote dkv comm
-            partial_local_dq = dist_attn_runtime.reduce_partial_dq(
-                partial_remote_dq=partial_remote_dq,
-                partial_local_dq=partial_local_dq,
-            )
+            # NOTE: Because dq reduce is doing on local rank, if skip_attn is True,
+            #       we just skip the reduce operation.
+            if not skip_attn:
+                # reduce ith partial dq, overlapped with ith remote dkv comm
+                partial_local_dq = dist_attn_runtime.reduce_partial_dq(
+                    partial_remote_dq=partial_remote_dq,
+                    partial_local_dq=partial_local_dq,
+                )
 
             # wait for (i-1)th partial dkv reduced
             # overlapped with ith remote dkv comm

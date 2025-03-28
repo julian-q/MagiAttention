@@ -10,7 +10,7 @@
 ### Step1: activate the NGC Pytorch Docker container
 
 * release note: [here](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-24-04.html#rel-24-04)
-* docker image version: nvcr.io/nvidia/pytorch:24.04-py3
+* docker image version: nvcr.io/nvidia/pytorch:25.02-py3
 * docker run command:
 
     ```bash

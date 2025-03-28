@@ -29,6 +29,29 @@ class AttnArg:
     def __post_init__(self):
         # shape check
         assert len(self.q_ranges) == len(self.k_ranges) == len(self.is_causal_mapping)
+        # filter out k_ranges with seqlen == 0
+        self.q_ranges = AttnRanges.from_ranges(
+            [
+                q_range
+                for q_range, k_range in zip(self.q_ranges, self.k_ranges)
+                if k_range.seqlen > 0
+            ]
+        )
+        self.k_ranges = AttnRanges.from_ranges(
+            [
+                k_range
+                for q_range, k_range in zip(self.q_ranges, self.k_ranges)
+                if k_range.seqlen > 0
+            ]
+        )
+        self.is_causal_mapping = [
+            is_causal_mapping
+            for q_range, k_range, is_causal_mapping in zip(
+                self.q_ranges, self.k_ranges, self.is_causal_mapping
+            )
+            if k_range.seqlen > 0
+        ]
+
         batch_size = len(self.q_ranges)
 
         # init tensors
@@ -94,6 +117,10 @@ class AttnArg:
             start = q_range.end
         if start < end:
             self.out_zero_fill_ranges.append((start, end))
+
+        self.out_zero_fill_ranges = (
+            AttnRanges.from_ranges(self.out_zero_fill_ranges).merge().to_naive_ranges()
+        )
 
     def to_ffa_args(self) -> dict:
         return self.ffa_args_dict

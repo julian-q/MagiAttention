@@ -40,6 +40,7 @@ class DistAttnConfig:
     overlap_config: OverlapConfig = (
         OverlapConfig()
     )  # TODO: add distinct overlap config for fwd/bwd in the future
+    high_bandwith_domain_size: int = 1
     deterministic: bool = False
 
     def __post_init__(self):

@@ -400,6 +400,10 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
             torch.bfloat16,
         ],
     )
+    @parameterize(
+        "high_bandwith_domain_size",
+        [1, 2, 4, 8],
+    )
     def test_pipeline(
         self,
         attn_config: dict[str, Any],
@@ -407,7 +411,14 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
         num_heads: int,
         head_dim: int,
         dtype: torch.dtype,
+        high_bandwith_domain_size: int,
     ):
+        if (
+            self.world_size % high_bandwith_domain_size != 0
+            or high_bandwith_domain_size > self.world_size
+        ):
+            # skip for invalid high_bandwith_domain_size
+            return
         # -----    switch mode   ---- #
 
         if profile_mode:
@@ -435,7 +446,7 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
         ), f"{attn_config=} | \n\n{overlap_config=}"
 
         test_case = (
-            f"world_size=[{self.world_size}] x "
+            f"world_size=[{self.world_size}] x high_bandwith_domain_size=[{high_bandwith_domain_size}] x "
             f"attn_config=[{attn_config[NAME]}] x overlap_config=[{overlap_config[NAME]}] x "
             f"dtype=[{dtype}] x (nh,hd)=[({num_heads},{head_dim})]"
         )
@@ -460,6 +471,7 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
                     if k not in (NAME, PROFILE_ONLY)
                 }
             ),
+            high_bandwith_domain_size=high_bandwith_domain_size,
             deterministic=False,
         )
 
