@@ -413,18 +413,13 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
         dtype: torch.dtype,
         high_bandwith_domain_size: int,
     ):
-        if (
-            self.world_size % high_bandwith_domain_size != 0
-            or high_bandwith_domain_size > self.world_size
-        ):
-            # skip for invalid high_bandwith_domain_size
-            return
         # -----    switch mode   ---- #
 
         if profile_mode:
             prof_iters, prof_start_iter, prof_end_iter = 10, 4, 6
         else:
             prof_iters, prof_start_iter, prof_end_iter = 1, -1, -1
+            assert dffa.is_sanity_check_enable()
 
         if profile_mode ^ attn_config.get(PROFILE_ONLY, False):
             return
@@ -437,6 +432,12 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
             attn_config.get(SKIP_WORLD_SIZE, [])
             and self.world_size in attn_config[SKIP_WORLD_SIZE]
         ):
+            return
+        if (
+            self.world_size % high_bandwith_domain_size != 0
+            or high_bandwith_domain_size > self.world_size
+        ):
+            # skip for invalid high_bandwith_domain_size
             return
 
         # -----    construct test case name   ---- #
@@ -462,7 +463,7 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
 
         device = torch.cuda.current_device()
 
-        dist_attn_config_w_mso = DistAttnConfig(
+        dist_attn_config = DistAttnConfig(
             dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
             overlap_config=OverlapConfig(
                 **{
@@ -505,7 +506,7 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
                 is_same_source=True,
                 is_q_permutable=True,
                 is_k_permutable=True,
-                dist_attn_config=dist_attn_config_w_mso,
+                dist_attn_config=dist_attn_config,
             )
             # HACK: double cp group for kv/dkv
             dist_attn_runtime_mgr.dist_attn_runtime.cp_group_dkv = self.nccl_groups[1]

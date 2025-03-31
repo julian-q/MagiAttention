@@ -345,6 +345,7 @@ class DistAttnSolver:
         self.cp_group = cp_group
         self.shard_seqlen_q = dispatch_meta_q.shard_seqlen
         self.shard_seqlen_k = dispatch_meta_k.shard_seqlen
+        self.high_bandwith_domain_size = high_bandwith_domain_size
 
         self.overlap_config = overlap_config
         self.overlap_solver = OverlapSolver(alg=self.overlap_config.alg)
@@ -368,28 +369,21 @@ class DistAttnSolver:
             host_q_ranges_global_this_rank,
             host_k_ranges_global_this_rank,
             remote_k_ranges_global_this_rank,
+            remote_k_ranges_global_hb_domain,
+            remote_k_ranges_global_lb_domain,
         ) = self._init_host_remote_ranges_global_this_rank(
             dispatch_meta_q=dispatch_meta_q,
             dispatch_meta_k=dispatch_meta_k,
             bucket_this_rank=bucket_this_rank,
         )
 
+        # set some attributes that might be fetched from outside
         self.bucket = bucket_this_rank
         self.host_q_ranges_global = host_q_ranges_global_this_rank
         self.host_k_ranges_global = host_k_ranges_global_this_rank
         self.remote_k_ranges_global = remote_k_ranges_global_this_rank
-
-        # init host rank entry for this rank
-        remote_k_ranges_global_hb_domain = (
-            dispatch_meta_k.host_ranges_this_domain.find_hole_ranges(
-                host_k_ranges_global_this_rank,
-            )
-        )
-        remote_k_ranges_global_lb_domain = (
-            remote_k_ranges_global_this_rank.find_hole_ranges(
-                dispatch_meta_k.host_ranges_this_domain,
-            )
-        )
+        self.remote_k_ranges_global_hb_domain = remote_k_ranges_global_hb_domain
+        self.remote_k_ranges_global_lb_domain = remote_k_ranges_global_lb_domain
 
         # init host rank entry for this rank
         self.host_rank_entry_this_rank = self._init_host_rank_entry_this_rank(
@@ -401,10 +395,8 @@ class DistAttnSolver:
         )
 
         # init remote rank entry for high-bandwidth domain stage this rank
-        self.remote_rank_entry_for_this_domain = (
-            self._init_remote_rank_entry_this_domain(
-                host_rank_entry_this_rank=self.host_rank_entry_this_rank,
-            )
+        remote_rank_entry_for_this_domain = self._init_remote_rank_entry_this_domain(
+            host_rank_entry_this_rank=self.host_rank_entry_this_rank,
         )
 
         # init remote rank entry for each stage for this rank
@@ -414,14 +406,14 @@ class DistAttnSolver:
             )
         )
 
-        # insert remote rank entry for high-bandwidth domain stage this rank
+        # HACK: prepend remote rank entry for high-bandwidth domain as the first stage
+        # and the overlap degree need plus 1, since hb remote rank entry is unaware by the overlap solver
+        # FIXME: therefore, the overlap solver will wrongly use the remote comm in first lb domain stage
+        # to overlap with the host calc, instead of the remote comm in hb domain
         self.remote_rank_entry_per_stage_this_rank.insert(
             0,
-            self.remote_rank_entry_for_this_domain,
+            remote_rank_entry_for_this_domain,
         )
-
-        # NOTE: the overlap degree need plus 1, because high-bandwidth domain stage
-        #       is not included in the overlap solver
         self.overlap_degree += 1
 
         # init remote rank entry for each rank for each stage
@@ -444,7 +436,7 @@ class DistAttnSolver:
         dispatch_meta_q: DispatchMeta,
         dispatch_meta_k: DispatchMeta,
         bucket_this_rank: AttnBucket,
-    ) -> tuple[AttnRanges, AttnRanges, AttnRanges]:
+    ) -> tuple[AttnRanges, AttnRanges, AttnRanges, AttnRanges, AttnRanges]:
         # init host q_ranges global for this rank
         host_q_ranges_global_this_rank = dispatch_meta_q.host_ranges_per_rank[
             self.cp_rank
@@ -456,9 +448,29 @@ class DistAttnSolver:
         ].merge()
 
         # init remote k_ranges global for this rank
+        # NOTE: this only contains the remote k ranges that we need to calculate from
         remote_k_ranges_global_this_rank = bucket_this_rank.k_ranges.find_hole_ranges(
             host_k_ranges_global_this_rank,
             is_other_merged=True,
+        )
+
+        # split remote k_ranges global into high-bandwidth / low-bandwidth domain
+        host_k_ranges_global_this_domain = (
+            dispatch_meta_k.host_ranges_this_domain.merge()
+        )
+        remote_k_ranges_global_hb_domain = (
+            remote_k_ranges_global_this_rank.find_overlap_ranges(
+                host_k_ranges_global_this_domain,
+                is_self_merged=True,
+                is_other_merged=True,
+            )
+        )
+        remote_k_ranges_global_lb_domain = (
+            remote_k_ranges_global_this_rank.find_hole_ranges(
+                host_k_ranges_global_this_domain,
+                is_self_merged=True,
+                is_other_merged=True,
+            )
         )
 
         # sanity check
@@ -467,6 +479,8 @@ class DistAttnSolver:
             assert host_q_ranges_global_this_rank.is_merged()
             assert host_k_ranges_global_this_rank.is_merged()
             assert remote_k_ranges_global_this_rank.is_merged()
+            assert remote_k_ranges_global_hb_domain.is_merged()
+            assert remote_k_ranges_global_lb_domain.is_merged()
 
             # whether q_ranges and k_ranges are one-one mapping in attn calc
             attn_calc_q_ranges_global = bucket_this_rank.q_ranges
@@ -476,10 +490,32 @@ class DistAttnSolver:
                 f"{len(attn_calc_k_ranges_global)=}."
             )
 
+            # check about high-bandwidth domain
+            intersect_ranges_between_hb_lb = (
+                remote_k_ranges_global_hb_domain.find_overlap_ranges(
+                    remote_k_ranges_global_lb_domain,
+                )
+            )
+            assert intersect_ranges_between_hb_lb.is_empty()  # they are orthogonal
+
+            if self.high_bandwith_domain_size == 1:
+                # in such case, host k ranges in this hb domain are exactly the host k ranges for this rank
+                # then there'll be no remote k ranges in this hb domain, and
+                # the remote k ranges in lb domain are exactly the remote k ranges for this rank
+                assert (
+                    host_k_ranges_global_this_rank == host_k_ranges_global_this_domain
+                )
+                assert remote_k_ranges_global_hb_domain.is_empty()
+                assert (
+                    remote_k_ranges_global_lb_domain == remote_k_ranges_global_this_rank
+                )
+
         return (
             host_q_ranges_global_this_rank,
             host_k_ranges_global_this_rank,
             remote_k_ranges_global_this_rank,
+            remote_k_ranges_global_hb_domain,
+            remote_k_ranges_global_lb_domain,
         )
 
     @nvtx.instrument_nvtx
@@ -496,6 +532,8 @@ class DistAttnSolver:
         # -------   chunk remote k ranges global  ------ #
 
         remote_k_ranges_global_per_chunk = self._chunk_remote_k_ranges_global(
+            # NOTE: we only chunk the remote k ranges in the low-bandwidth domain
+            # to be passed to overlap solver for multi-stage overlapping
             remote_k_ranges_global=remote_k_ranges_global_lb_domain,
         )
 
@@ -525,14 +563,6 @@ class DistAttnSolver:
             ith_attn_calc_k_ranges_global = AttnRanges()
             ith_attn_calc_k_ranges_global.append(ith_attn_slice_global.k_range)  # type: ignore
 
-            self._make_attn_calc_remote_slice(
-                remote_k_ranges_global=remote_k_ranges_global_hb_domain,
-                attn_calc_remote_slice_list=attn_calc_remote_slice_list_hb_domain,
-                ith_attn_calc_host_q_range_local=ith_attn_calc_host_q_range_local,
-                ith_attn_calc_k_ranges_global=ith_attn_calc_k_ranges_global,
-                ith_attn_slice_global_mask_type=ith_attn_slice_global_mask_type,
-            )
-
             # -------   make ith attn calc host slice local  ------ #
 
             self._make_ith_attn_calc_host_slice_local(
@@ -548,6 +578,16 @@ class DistAttnSolver:
             self._make_ith_attn_calc_remote_slice_per_chunk(
                 remote_k_ranges_global_per_chunk=remote_k_ranges_global_per_chunk,
                 attn_calc_remote_slice_list_per_chunk=attn_calc_remote_slice_list_per_chunk,
+                ith_attn_calc_host_q_range_local=ith_attn_calc_host_q_range_local,
+                ith_attn_calc_k_ranges_global=ith_attn_calc_k_ranges_global,
+                ith_attn_slice_global_mask_type=ith_attn_slice_global_mask_type,
+            )
+
+            # -------   make ith attn calc remote slice for hb domain  ------ #
+
+            self._make_attn_calc_remote_slice(
+                remote_k_ranges_global=remote_k_ranges_global_hb_domain,
+                attn_calc_remote_slice_list=attn_calc_remote_slice_list_hb_domain,
                 ith_attn_calc_host_q_range_local=ith_attn_calc_host_q_range_local,
                 ith_attn_calc_k_ranges_global=ith_attn_calc_k_ranges_global,
                 ith_attn_slice_global_mask_type=ith_attn_slice_global_mask_type,
@@ -993,15 +1033,9 @@ class DistAttnSolver:
             for attn_slice in host_rank_entry_this_rank.attn_calc_remote_slice_list_hb_domain
         ]
 
-        # Merge all k_ranges from slices, which is the remote_k_ranges_global needed for this remote_entry
-        remote_k_ranges_global_this_stage = AttnRanges()
-        for q_range, k_ranges in slice_tuples:
-            remote_k_ranges_global_this_stage.extend(k_ranges)
-        remote_k_ranges_global_this_stage = remote_k_ranges_global_this_stage.merge()
-
         return self._make_remote_entry_for_one_stage(
             slice_tuples=slice_tuples,
-            remote_k_ranges_global_this_stage=remote_k_ranges_global_this_stage,
+            remote_k_ranges_global_this_stage=host_rank_entry_this_rank.remote_k_ranges_global_hb_domain,
             host_k_ranges_global_this_rank=host_rank_entry_this_rank.host_k_ranges_global,
         )
 

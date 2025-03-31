@@ -2,8 +2,6 @@ import datetime
 from dataclasses import dataclass
 from typing import Optional
 
-# import torch.distributed
-# import torch.distributed as dist
 import deepspeed
 import deepspeed.comm as dist
 import torch
@@ -14,6 +12,8 @@ from torch.testing._internal.common_utils import run_tests
 from dffa.common.enum import AttnMaskType
 from dffa.common.ranges import AttnRanges
 from dffa.testing.dist_common import DistTestBase, with_comms
+
+# isort: split
 from exps.attn.baselines.ulysses import DSUlysses
 
 

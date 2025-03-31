@@ -32,9 +32,9 @@ class DispatchMeta:
     cp_size: int
 
     seqlens: list[int]
-    seqlens_permed: list[int]  # unused property
-    seqlens_perm_idxs: list[int]  # unused property
-    seqlens_unperm_idxs: list[int]  # unused property
+    seqlens_permed: list[int]  # used but not enabled property
+    seqlens_perm_idxs: list[int]  # used but not enabled property
+    seqlens_unperm_idxs: list[int]  # used but not enabled property
 
     cu_seqlens: list[int]  # unused property
     cu_seqlens_permed: list[int]  # unused property
@@ -55,7 +55,7 @@ class DispatchMeta:
 
     @property
     def host_ranges_this_domain(self) -> AttnRanges:
-        ans = AttnRanges()
+        attn_ranges = AttnRanges()
         domain_rank = self.cp_rank // self.high_bandwith_domain_size
         bucket_per_domain = self.buckets_per_rank[
             domain_rank
@@ -63,8 +63,8 @@ class DispatchMeta:
             * self.high_bandwith_domain_size
         ]
         for bucket in bucket_per_domain:
-            ans.extend(bucket.q_ranges)
-        return ans
+            attn_ranges.extend(bucket.q_ranges)
+        return attn_ranges
 
     def __post_init__(self) -> None:
         assert len(self.seqlens) == len(self.seqlens_permed) == self.batch_size
