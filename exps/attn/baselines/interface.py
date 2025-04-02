@@ -93,6 +93,6 @@ class AttnBaselineInterface(ABC):
 
         Returns:
             tuple[torch.Tensor, torch.Tensor]:
-                1. the output tensor, with shape [total_seqlen_q, b, nhq, hd]
+                1. the output tensor, with shape [total_seqlen_q, nhq, hd]
                 2. the softmax lse tensor, with shape [b, nhq, max_seqlen_q]
         """
