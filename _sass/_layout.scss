@@ -1,0 +1,118 @@
+/******************************************************************************
+ * Content
+ ******************************************************************************/
+
+body {
+  padding-bottom: 70px;
+  color: var(--global-text-color);
+  background-color: var(--global-bg-color);
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    scroll-margin-top: 66px;
+  }
+}
+
+body.fixed-top-nav {
+  // Add some padding for the nav-bar.
+  padding-top: 56px;
+}
+
+body.sticky-bottom-footer {
+  // Remove padding below footer.
+  padding-bottom: 0;
+}
+
+.container {
+  max-width: $max-content-width;
+}
+
+// Profile
+.profile {
+  img {
+    width: 100%;
+  }
+}
+
+// TODO: redefine content layout.
+
+/******************************************************************************
+ * Sidebar
+ ******************************************************************************/
+
+.sidebar {
+  position: fixed; // 固定位置
+  top: 0; // 距离顶部 0
+  left: 0; // 距离左侧 0
+  height: 100vh; // 占满整个视口高度
+  width: 250px; // 设置侧边栏宽度
+  background-color: var(--global-bg-color); // 背景颜色
+  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1); // 添加阴影效果
+  z-index: 1000; // 确保侧边栏在其他内容之上
+  padding: 20px; // 内边距
+  overflow-y: auto; // 允许滚动
+
+  /* 内容居中 */
+  display: flex; // 使用 Flexbox 布局
+  flex-direction: column; // 垂直排列内容
+  align-items: left; // 水平居中
+  justify-content: center; // 垂直居中
+
+  /* 移除列表项的小黑点 */
+  ul {
+    list-style: none; // 移除默认的列表样式
+    padding: 0; // 移除内边距
+    margin: 0; // 移除外边距
+  }
+
+  li {
+    margin: 10px 0; // 列表项之间的间距
+    font-weight: bold; // 加粗字体
+    text-align: center; // 文本居中
+  }
+
+  h3 {
+    font-weight: bold; // 加粗字体
+    text-align: center; // 文本居中
+    margin-bottom: 20px; // 与列表的间距
+  }
+}
+
+/******************************************************************************
+ * Main content
+ ******************************************************************************/
+
+.content {
+  margin-left: 250px; // 为主内容留出侧边栏的宽度
+  padding: 20px;
+}
+
+/******************************************************************************
+ * Responsive styles for narrow screens
+ ******************************************************************************/
+
+@media (max-width: 768px) {
+  .sidebar {
+    display: none; // 隐藏侧边栏
+  }
+
+  .content {
+    margin-left: 0; // 恢复主内容的边距
+  }
+}
+
+/******************************************************************************
+ * Publications
+ ******************************************************************************/
+
+// TODO: redefine publications layout.
+
+/*****************************************************************************
+* Projects
+*****************************************************************************/
+
+// TODO: redefine projects layout.
