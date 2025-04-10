@@ -7,13 +7,7 @@ from dffa.meta.solver.dispatch_solver import (
     DispatchSolution,
     DispatchSolver,
 )
-from dffa.utils import (
-    flatten_nested_list,
-    is_list_value_all,
-    nvtx,
-    perm_idxs2unperm_idxs,
-    wrap_to_list,
-)
+from dffa.utils import flatten_nested_list, nvtx, perm_idxs2unperm_idxs, wrap_to_list
 
 __all__ = [
     "calc_dispatch_meta_from_qk_ranges",
@@ -111,11 +105,6 @@ def calc_dispatch_meta_from_qk_ranges(
         "the algorithm that returns the partitions, each of which shares the equal number of workloads, "
         f"bot got {dispatch_config.alg=}."
     )
-
-    # TODO: limited to all full attn masks for now
-    assert is_list_value_all(
-        attn_mask_type, AttnMaskType.FULL
-    ), "Only supports all full attn mask for now."
 
     # --------------      calculate dispatch meta   -------------- #
 
@@ -337,17 +326,7 @@ def _calc_self_attn_areas(
         global_bucket(AttnBucket): the global bucket
     """
 
-    # --------------      pre-check args       -------------- #
-
-    # TODO: limited to all full attn masks for now
-    assert is_list_value_all(attn_mask_type, just_same=True), (
-        "Only supports either all full attn masks " "or all causal attn masks for now."
-    )
-
     # -----------    init meta info and global bucket    ----------- #
-
-    mask_type = attn_mask_type[0]
-    is_causal = mask_type == AttnMaskType.CAUSAL
 
     global_bucket = AttnBucket()
     range_idx, seqi_mid = 0, 0
@@ -360,6 +339,9 @@ def _calc_self_attn_areas(
 
         slice_id = 0
         while cur_chunk_size < chunk_size:  # for each slice
+            mask_type = attn_mask_type[range_idx]
+            is_causal = mask_type == AttnMaskType.CAUSAL
+
             slice: AttnSlice = AttnSlice(slice_id=slice_id, mask_type=mask_type)
 
             seqi_end = q_ranges[range_idx].end
@@ -393,7 +375,7 @@ def _calc_self_attn_areas(
                 if is_causal:
                     if attn_len > seqi_len_bottom:  # the area of a trapezoid
                         slice.area = (
-                            (2 * attn_len - seqi_len_bottom) * seqi_len_bottom // 2
+                            (2 * attn_len - seqi_len_bottom + 1) * seqi_len_bottom // 2
                         )
                     else:  # the area of a triangle
                         slice.area = (1 + attn_len) * attn_len // 2
@@ -420,6 +402,7 @@ def _calc_self_attn_areas(
                             (
                                 2 * (attn_len - seqi_len_bottom)
                                 + seqi_len_bottom_truncate
+                                + 1
                             )
                             * seqi_len_bottom_truncate
                             // 2
@@ -453,10 +436,10 @@ def _calc_self_attn_areas(
             slice.q_range = AttnRange(start=q_range_start, end=q_range_end)
             slice.k_range = AttnRange(start=k_range_start, end=k_range_end)
 
-            # append this q slice to the current chunk
-            chunk.q_slices.append(slice)
-
-            slice_id += 1
+            if slice.k_range.seqlen > 0 and slice.area > 0:
+                # append this q slice to the current chunk except invalid slice
+                chunk.q_slices.append(slice)
+                slice_id += 1
 
         global_bucket.q_chunks.append(chunk)
 

@@ -4,6 +4,7 @@ import torch
 
 import dffa
 from dffa.common.ranges import AttnRanges
+from dffa.utils import is_list_value_all
 
 
 @dataclass(repr=False)
@@ -29,6 +30,12 @@ class AttnArg:
     def __post_init__(self):
         # shape check
         assert len(self.q_ranges) == len(self.k_ranges) == len(self.is_causal_mapping)
+
+        if not dffa.is_causal_mask_enable():
+            assert is_list_value_all(
+                self.is_causal_mapping, False, allow_empty=True
+            ), "Only supports all full attn mask for now."
+
         # filter out k_ranges with seqlen == 0
         self.q_ranges = AttnRanges.from_ranges(
             [
@@ -67,10 +74,14 @@ class AttnArg:
 
         # sanity check
         if dffa.is_sanity_check_enable():
-            # 检查每一个k_ranges的left < right
-            for k_ranges in self.k_ranges:
-                assert k_ranges.start < k_ranges.end
+            # check non-empty k ranges
+            for k_range in self.k_ranges:
+                assert not k_range.is_empty()
 
+            # check non-overlapped q ranges
+            assert self.q_ranges.is_non_overlap()
+
+            # check tensor shape
             if batch_size > 0:
                 assert self.q_ranges_tensor.shape == torch.Size(
                     [batch_size, 2]
@@ -79,18 +90,16 @@ class AttnArg:
                     [batch_size, 2]
                 ), f"{self.k_ranges_tensor.shape=}, {batch_size=}"
                 assert self.is_causal_mapping_tensor.shape == torch.Size(
-                    [batch_size]
+                    [
+                        batch_size,
+                    ]
                 ), f"{self.is_causal_mapping_tensor.shape=}, {batch_size=}"
 
         # init max seqlen
         if batch_size > 0:
             self.skip_attn = False
-            self.max_seqlen_q = max(
-                q_range.end - q_range.start for q_range in self.q_ranges
-            )
-            self.max_seqlen_k = max(
-                k_range.end - k_range.start for k_range in self.k_ranges
-            )
+            self.max_seqlen_q = self.q_ranges.max_seqlen
+            self.max_seqlen_k = self.k_ranges.max_seqlen
         elif batch_size == 0:  # no calc needed
             self.skip_attn = True
             self.max_seqlen_q = 0

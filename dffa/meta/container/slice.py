@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from dffa.common.enum import AttnMaskType
 from dffa.common.range import AttnRange
 from dffa.common.ranges import AttnRanges
-from dffa.utils import is_list_value_all
 
 
 @dataclass(repr=False)
@@ -26,11 +25,21 @@ class AttnSlice:
                 # just the area of a full rectangle mask
                 self._area = self.q_range.seqlen * self.k_range.seqlen  # type: ignore
             elif self.mask_type is AttnMaskType.CAUSAL:
-                raise NotImplementedError(
-                    "TODO: Implement area auto-calculation for causal mask."
+                if self.k_range.seqlen > self.q_range.seqlen:  # type: ignore
+                    # the area of a trapezoid
+                    self._area = (
+                        (2 * self.k_range.seqlen - self.q_range.seqlen + 1)  # type: ignore
+                        * self.q_range.seqlen  # type: ignore
+                        // 2
+                    )
+                else:  # the area of a triangle
+                    self._area = (1 + self.k_range.seqlen) * self.k_range.seqlen // 2  # type: ignore
+            else:
+                raise ValueError(
+                    f"Only support full or causal mask, but got {self.mask_type}."
                 )
 
-        return self._area  # type: ignore
+        return self._area
 
     @area.setter
     def area(self, area: int):
@@ -59,12 +68,24 @@ class MultiKAttnSlice:
     @property
     def area(self) -> int:
         if self._area is None:
-            assert is_list_value_all(
-                self.mask_types,
-                AttnMaskType.FULL,
-            ), f"Only support all full mask for MultiKAttnSlice for now, but got {self.mask_types}"
-
-            self._area = self.q_range.seqlen * self.k_ranges.total_seqlen
+            self._area = 0
+            for k_range, mask_type in zip(self.k_ranges._ranges, self.mask_types):
+                if mask_type is AttnMaskType.FULL:
+                    # just the area of a full rectangle mask
+                    self._area += self.q_range.seqlen * k_range.seqlen
+                elif mask_type is AttnMaskType.CAUSAL:
+                    if k_range.seqlen > self.q_range.seqlen:  # the area of a trapezoid
+                        self._area += (
+                            (2 * k_range.seqlen - self.q_range.seqlen + 1)
+                            * self.q_range.seqlen
+                            // 2
+                        )
+                    else:  # the area of a triangle
+                        self._area += (1 + k_range.seqlen) * k_range.seqlen // 2
+                else:
+                    raise ValueError(
+                        f"Only support full or causal mask, but got {mask_type} in mask_types."
+                    )
 
         return self._area
 

@@ -76,3 +76,13 @@ def is_sdpa_backend_enable() -> bool:
     since the performance is not acceptable
     """
     return os.environ.get("DFFA_SDPA_BACKEND", "0") == "1"
+
+
+def is_causal_mask_enable() -> bool:
+    """
+    Toggle this env variable to 1 to allow causal mask
+    NOTE: This flag is only used during experimental stage
+    needed to be removed when causal mask is fully supported,
+    both in functionality and performance
+    """
+    return os.environ.get("DFFA_SUPPORT_CAUSAL_MASK", "0") == "1"

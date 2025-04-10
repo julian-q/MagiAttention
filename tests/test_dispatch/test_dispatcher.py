@@ -93,6 +93,7 @@ class TestDispatcher(DistTestBase):
             is_same_source=is_same_source,
             is_q_permutable=is_q_permutable,
             is_k_permutable=is_k_permutable,
+            # pass a placeholder since required
             high_bandwith_domain_size=self.world_size // 2,
         )
 

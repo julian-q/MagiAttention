@@ -1,7 +1,20 @@
 import functools
-import os
+import hashlib
+import random
 import warnings
-from typing import TYPE_CHECKING, Any, Callable, Sequence, TypeAlias, Union
+from contextlib import contextmanager
+from random import getstate as python_get_rng_state
+from random import setstate as python_set_rng_state
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generator,
+    Iterable,
+    Sequence,
+    TypeAlias,
+    Union,
+)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,35 +43,9 @@ def deprecated(func: Callable) -> Callable:
     return wrapper
 
 
-def setup_dist_env(
-    base_seed: int | None = None, seed_bias: Callable = lambda rank: 0
-) -> tuple[int, int, dist.ProcessGroup, str, int | None]:
-    """set up distributed environment with NCCL backend,
-    NOTE: the test script using this func to set up should be executed through torchrun
-    """
-    rank = int(os.environ["LOCAL_RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    torch.cuda.set_device(rank)
-
-    dist.init_process_group(
-        backend="nccl",
-        rank=rank,
-        world_size=world_size,
-    )
-
-    manual_seed = None
-    if base_seed is not None:
-        manual_seed = base_seed + seed_bias(rank)
-        torch.manual_seed(manual_seed)
-
-    return rank, world_size, dist.group.WORLD, f"cuda:{rank}", manual_seed  # noqa: E231
-
-
-def clearup_dist_env() -> None:
-    dist.destroy_process_group()
-
-
-def rprint_rank(msg: str, rank: int | None = None, width: int = 50) -> None:
+def rprint_rank(
+    msg: str, rank: int | None = None, width: int = 50
+) -> None:  # pragma: no cover
     if rank is None or dist.get_rank() == rank:
         rank = dist.get_rank()
         rprint(
@@ -67,7 +54,9 @@ def rprint_rank(msg: str, rank: int | None = None, width: int = 50) -> None:
         )
 
 
-def write_rank(msg: str, path: str, rank: int | None = None, width: int = 50) -> None:
+def write_rank(
+    msg: str, path: str, rank: int | None = None, width: int = 50
+) -> None:  # pragma: no cover
     if rank is None or dist.get_rank() == rank:
         rank = dist.get_rank()
         write_content = (
@@ -176,7 +165,7 @@ def transpose_matrix(matrix: list[list[Any]]) -> list[list[Any]]:
     return transposed
 
 
-def repr_matrix(matrix: np.ndarray) -> str:
+def repr_matrix(matrix: np.ndarray) -> str:  # pragma: no cover
     repr_str = ""
     sep = "    "
 
@@ -205,7 +194,7 @@ def vis_matrix(
     val_ticks: list[float] | None = None,
     format_ticks: Callable | None = None,
     save_path: str | None = None,
-) -> None:
+) -> None:  # pragma: no cover
     cmap = plt.cm.gray
     nrows, ncols = matrix.shape[0], matrix.shape[1]
 
@@ -232,6 +221,28 @@ def vis_matrix(
         plt.savefig(save_path)
 
 
+def make_causal_mask(
+    seqlen_q: int,
+    seqlen_k: int,
+    align: str = "bottom-right",
+    dtype=torch.int32,
+    device: str = "cpu",
+) -> torch.Tensor:
+    max_seqlen = max(seqlen_q, seqlen_k)
+    causal_mask = torch.tril(torch.ones((max_seqlen, max_seqlen))).to(
+        dtype=dtype, device=device
+    )
+
+    if align == "bottom-right":
+        causal_mask = causal_mask[-seqlen_q:, -seqlen_k:]
+    elif align == "top-left":
+        causal_mask = causal_mask[:seqlen_q, :seqlen_k]
+    else:
+        raise ValueError(f"Invalid alignment mode: {align}")
+
+    return causal_mask
+
+
 def get_attn_mask_from_ranges(
     q_ranges: "NaiveRanges",
     k_ranges: "NaiveRanges",
@@ -239,18 +250,32 @@ def get_attn_mask_from_ranges(
     total_seqlen_q: int,
     total_seqlen_k: int,
 ) -> torch.Tensor:
-    assert is_list_value_all(
-        is_causal_mapping, False
-    ), "For now, we only support full mask for each attn slice"
+    assert len(q_ranges) == len(k_ranges) == len(is_causal_mapping)
 
-    bsz = len(q_ranges)
     mask = torch.zeros(
         (total_seqlen_q, total_seqlen_k),
-        device=torch.cuda.current_device(),
         dtype=torch.bool,
+        device=torch.cuda.current_device(),
     )
-    for i in range(bsz):
-        mask[q_ranges[i][0] : q_ranges[i][1], k_ranges[i][0] : k_ranges[i][1]] = True
+
+    for q_range, k_range, is_causal in zip(q_ranges, k_ranges, is_causal_mapping):
+        if is_causal:
+            causal_mask = make_causal_mask(
+                seqlen_q=q_range[1] - q_range[0],
+                seqlen_k=k_range[1] - k_range[0],
+                dtype=torch.bool,
+                device=torch.cuda.current_device(),
+            )
+            mask[
+                q_range[0] : q_range[1],
+                k_range[0] : k_range[1],
+            ] = causal_mask
+        else:
+            mask[
+                q_range[0] : q_range[1],
+                k_range[0] : k_range[1],
+            ] = True
+
     return mask
 
 
@@ -261,3 +286,66 @@ def to_higher_fp_dtype(
     if torch.finfo(tensor.dtype).bits < torch.finfo(lowest_precision).bits:
         return tensor.to(lowest_precision)
     return tensor
+
+
+def max_fp_dtype(
+    *dtypes: torch.dtype,
+) -> torch.dtype:
+    return max(dtypes, key=lambda dtype: torch.finfo(dtype).bits)
+
+
+def argmin(iterable: Iterable[Any], key: Callable = lambda x: x) -> int:
+    return min(enumerate(iterable), key=lambda x: key(x[1]))[0]
+
+
+def argmax(iterable: Iterable[Any], key: Callable = lambda x: x) -> int:
+    return max(enumerate(iterable), key=lambda x: key(x[1]))[0]
+
+
+def argsort(iterable: Iterable[Any], key: Callable = lambda x: x) -> list[int]:
+    return [i[0] for i in sorted(enumerate(iterable), key=lambda x: key(x[1]))]
+
+
+def str2seed(s: str) -> int:
+    max_value = 2**32 - 1  # numpy max seed
+    hash_value = int(hashlib.sha256(s.encode("utf-8")).hexdigest(), 16)
+
+    return hash_value % (max_value + 1)
+
+
+def set_random_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+
+def _collect_rng_states() -> dict[str, Any]:
+    """Collect the global random state of :mod:`torch`, :mod:`numpy` and Python."""
+    return {
+        "numpy": np.random.get_state(),
+        "python": python_get_rng_state(),
+    }
+
+
+def _set_rng_states(rng_state_dict: dict[str, Any]) -> None:
+    """Set the global random state of :mod:`torch`, :mod:`numpy` and Python in the current process."""
+    np.random.set_state(rng_state_dict["numpy"])
+    version, state, gauss = rng_state_dict["python"]
+    python_set_rng_state((version, tuple(state), gauss))
+
+
+@contextmanager
+def sync_rng(seed: int) -> Generator[None, None, None]:
+    """A context manager that syncs the random seed for everything including python, numpy and torch on all devices
+    and resets the global random state on exit to what it was before entering.
+
+    Args:
+        seed (int): The random seed to set.
+    """
+
+    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+        states = _collect_rng_states()
+        set_random_seed(seed)
+        yield
+        _set_rng_states(states)

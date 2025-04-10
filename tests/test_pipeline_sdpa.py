@@ -1,4 +1,5 @@
 import os
+import random
 from typing import Any
 
 import torch
@@ -22,7 +23,7 @@ from dffa.dist_attn_runtime_mgr import DistAttnRuntimeMgr
 from dffa.testing import parameterize
 from dffa.testing.dist_common import DistTestBase, with_comms
 from dffa.testing.precision import EPSILON, torch_attn_ref
-from dffa.utils import get_attn_mask_from_ranges
+from dffa.utils import get_attn_mask_from_ranges, is_list_value_all, str2seed, sync_rng
 
 NAME = "name"
 SKIP_WORLD_SIZE = "skip_world_size"
@@ -102,10 +103,6 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
     def world_size(self) -> int:
         return 1
 
-    @property
-    def seed(self) -> int:
-        return 42
-
     @with_comms
     @parameterize(
         # TODO: test more diverse and complicated attn mask
@@ -152,6 +149,40 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
                 "total_seqlen_q": 1050,
                 "total_seqlen_k": 1050,
                 "chunk_size": 5,
+            },
+            # varlen full attn with total seqlen 1k
+            # but reverse k ranges
+            {
+                NAME: "reverse_varlen_full_attn_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [896, 1024],
+                        [768, 896],
+                        [640, 768],
+                        [512, 640],
+                        [384, 512],
+                        [256, 384],
+                        [128, 256],
+                        [0, 128],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
             },
             # varlen block causal with total seqlen 960
             {
@@ -214,6 +245,174 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
                 "total_seqlen_q": 840,
                 "total_seqlen_k": 840,
                 "chunk_size": 4,
+            },
+            # varlen block causal with total seqlen 1k
+            # but reverse k ranges
+            {
+                NAME: "reverse_varlen_block_causal_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [512, 1024],
+                        [512, 896],
+                        [512, 768],
+                        [512, 640],
+                        [0, 512],
+                        [0, 384],
+                        [0, 256],
+                        [0, 128],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # varlen block causal with total seqlen 1k
+            # but as upper diagonal matrices
+            {
+                NAME: "upper_diagonal_varlen_block_causal_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 512],
+                        [128, 512],
+                        [256, 512],
+                        [384, 512],
+                        [512, 1024],
+                        [640, 1024],
+                        [768, 1024],
+                        [896, 1024],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # block sliding-window full with total seqlen 1k
+            {
+                NAME: "block_slide_window_full_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 384],
+                        [0, 512],
+                        [0, 640],
+                        [128, 768],
+                        [256, 896],
+                        [384, 1024],
+                        [512, 1024],
+                        [640, 1024],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # block sliding-window causal with total seqlen 1k
+            {
+                NAME: "block_slide_window_causal_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [0, 256],
+                        [0, 384],
+                        [128, 512],
+                        [256, 640],
+                        [384, 768],
+                        [512, 896],
+                        [640, 1024],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # block sliding-window causal with total seqlen 1k
+            # but reverse k ranges
+            {
+                NAME: "reverse_block_slide_window_causal_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [640, 1024],
+                        [512, 896],
+                        [384, 768],
+                        [256, 640],
+                        [128, 512],
+                        [0, 384],
+                        [0, 256],
+                        [0, 128],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
             },
         ],
     )
@@ -306,6 +505,10 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         [DTYPE],
     )
     @parameterize(
+        "random_causal_mapping",
+        [False, True],
+    )
+    @parameterize(
         "high_bandwith_domain_size",
         [1, 2, 4, 8],
     )
@@ -316,6 +519,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         num_heads: int,
         head_dim: int,
         dtype: torch.dtype,
+        random_causal_mapping: bool,
         high_bandwith_domain_size: int,
     ):
         # -----    skip for world size   ---- #
@@ -345,7 +549,8 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         test_case = (
             f"world_size=[{self.world_size}] x high_bandwith_domain_size=[{high_bandwith_domain_size}] x "
             f"attn_config=[{attn_config[NAME]}] x overlap_config=[{overlap_config[NAME]}] x "
-            f"dtype=[{dtype}] x (nh,hd)=[({num_heads},{head_dim})]"
+            f"dtype=[{dtype}] x (nh,hd)=[({num_heads},{head_dim})] x "
+            f"random_causal_mapping=[{random_causal_mapping}]"
         )
 
         # -----    contruct config from test cases   ---- #
@@ -353,6 +558,17 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         q_ranges: AttnRanges = attn_config["q_ranges"]
         k_ranges: AttnRanges = attn_config["k_ranges"]
         is_causal_mapping: list[bool] = attn_config["is_causal_mapping"]
+        if random_causal_mapping:
+            # NOTE: to test causal mapping, we design a mode to just use random `is_causal_mapping`
+            # instead of hard-coded config in the test cases
+            with sync_rng(seed=str2seed(test_case)):
+                is_causal_mapping = [
+                    random.choice([True, False]) for _ in is_causal_mapping
+                ]
+        if not dffa.is_causal_mask_enable():
+            # NOTE: skip any test case with causal mask when the feature is disabled
+            if not is_list_value_all(is_causal_mapping, False):
+                return
         total_seqlen_q: int = attn_config["total_seqlen_q"]
         total_seqlen_k: int = attn_config["total_seqlen_k"]
         chunk_size: int = attn_config["chunk_size"]
@@ -375,7 +591,10 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         dist_attn_runtime_mgr: DistAttnRuntimeMgr = init_dist_attn_runtime_mgr(
             q_ranges=q_ranges,
             k_ranges=k_ranges,
-            attn_mask_type=[AttnMaskType.FULL] * len(q_ranges),
+            attn_mask_type=[
+                AttnMaskType.CAUSAL if is_causal else AttnMaskType.FULL
+                for is_causal in is_causal_mapping
+            ],
             total_seqlen_q=total_seqlen_q,
             total_seqlen_k=total_seqlen_k,
             chunk_size=chunk_size,

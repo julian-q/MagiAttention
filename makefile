@@ -20,7 +20,9 @@ release:
 test:
 	pytest tests/
 
-coverage: # FIXME: something is wrong with the 'coverage run', maybe due to multiprocessing
+coverage:
+	rm -f .coverage
+	rm -f .coverage.*
 	coverage run -m pytest tests/
 	coverage combine
 	coverage report

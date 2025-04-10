@@ -4,7 +4,7 @@ import torch
 from einops import reduce
 
 from dffa.meta.collection.calc_meta import AttnArg
-from dffa.utils import get_attn_mask_from_ranges, is_list_value_all
+from dffa.utils import get_attn_mask_from_ranges
 
 from .utils import safe_subtract
 
@@ -126,10 +126,6 @@ def sdpa_fwd(
     v: torch.Tensor,
     attn_arg: AttnArg,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    assert is_list_value_all(
-        attn_arg.is_causal_mapping, False
-    ), "sdpa backend only support full mask for each attn slice"
-
     rearrange = len(q.shape) == 3  # from [t, nh, hd] to [1, nh, t, hd]
 
     if rearrange:
@@ -296,10 +292,6 @@ def sdpa_bwd(
     lse: torch.Tensor,
     attn_arg: AttnArg,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    assert is_list_value_all(
-        attn_arg.is_causal_mapping, False
-    ), "sdpa backend only support full mask for each attn slice"
-
     rearrange = len(q.shape) == 3  # from [t, nh, hd] to [1, nh, t, hd]
 
     if rearrange:

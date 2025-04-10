@@ -347,7 +347,7 @@ class DispatchSolver(nn.Module):
         bucket_num_limit = n // k
 
         # sort jobs in descending order
-        sorted_indices = np.argsort(jobs)[::-1]
+        sorted_indices = np.argsort(jobs, kind="stable")[::-1]
         jobs = [jobs[i] for i in sorted_indices]
 
         # init the job partition and its workloads

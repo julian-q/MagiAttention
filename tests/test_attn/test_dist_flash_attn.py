@@ -15,7 +15,7 @@ from dffa.testing import parameterize
 from dffa.testing.dist_common import DistTestBase, with_comms
 
 
-# TODO: add more unitest for dist ffa
+# TODO: add more unitest for dist ffa especially for causal
 class TestDistFlashAttn(DistTestBase):
     def init_pg(self) -> None:
         super().init_pg()

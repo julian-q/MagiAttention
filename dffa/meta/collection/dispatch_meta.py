@@ -51,19 +51,34 @@ class DispatchMeta:
 
     @property
     def host_ranges_per_rank(self) -> list[AttnRanges]:
-        return [bucket.q_ranges for bucket in self.buckets_per_rank]
+        # NOTE: since we discard the q_ranges which are belonging to
+        # certain empty slices due to causal mask, we can NOT recover
+        # the host ranges from the buckets, instead, we can just
+        # construct the host ranges using chunk ranges,
+        # since they will be used ONLY in merged form anyway
+
+        # return [bucket.q_ranges for bucket in self.buckets_per_rank]
+        return [
+            AttnRanges.from_ranges(
+                [
+                    [chunk_id * self.chunk_size, (chunk_id + 1) * self.chunk_size]
+                    for chunk_id in partition
+                ]
+            )
+            for partition in self.partitions
+        ]
 
     @property
     def host_ranges_this_domain(self) -> AttnRanges:
         attn_ranges = AttnRanges()
         domain_rank = self.cp_rank // self.high_bandwith_domain_size
-        bucket_per_domain = self.buckets_per_rank[
-            domain_rank
-            * self.high_bandwith_domain_size : (domain_rank + 1)
-            * self.high_bandwith_domain_size
-        ]
-        for bucket in bucket_per_domain:
-            attn_ranges.extend(bucket.q_ranges)
+        for host_ranges_ith_rank in self.host_ranges_per_rank[
+            self.high_bandwith_domain_size
+            * domain_rank : self.high_bandwith_domain_size
+            * (domain_rank + 1)
+        ]:
+            attn_ranges.extend(host_ranges_ith_rank)
+
         return attn_ranges
 
     def __post_init__(self) -> None:
