@@ -4,8 +4,11 @@ from dffa.meta.collection import DispatchMeta
 from dffa.meta.container import AttnBucket, AttnChunk, AttnSlice
 from dffa.meta.solver.dispatch_solver import (
     DispatchConfig,
+    DispatchJob,
     DispatchSolution,
     DispatchSolver,
+    IOUAffinity,
+    ToppHeapDispatchAlg,
 )
 from dffa.utils import flatten_nested_list, nvtx, perm_idxs2unperm_idxs, wrap_to_list
 
@@ -243,9 +246,18 @@ def _calc_self_attn_dispatch_meta_from_qk_ranges(
     # -------    solve dispatch load balancing and get chunk partitions   ------- #
 
     dispatch_solver = DispatchSolver(alg=dispatch_config.alg)
+    affinities = None
+    if isinstance(dispatch_config.alg, ToppHeapDispatchAlg):
+        affinities = [
+            IOUAffinity.from_ranges(chunk.k_ranges) for chunk in global_bucket.q_chunks
+        ]
+    dispatch_jobs = DispatchJob.from_job_list(
+        workloads=attn_areas,  # type: ignore[arg-type]
+        affinities=affinities,  # type: ignore[arg-type]
+    )
     dispatch_solution: DispatchSolution = dispatch_solver.solve(
-        jobs=attn_areas,  # type: ignore
-        k=cp_size,
+        jobs=dispatch_jobs,
+        num_buckets=cp_size,
     )
     partitions = dispatch_solution.bucket_partitions
 

@@ -372,6 +372,7 @@ class TestDistAttnSolver(DistTestBase):
         is_q_permutable = True
         is_k_permutable = True
 
+        # TODO: test top-p minhp dispatch alg
         dispatch_config = DispatchConfig(alg=MinHeapDispatchAlg())
 
         # ------------  init SimpleNamespace class ------------ #
@@ -1222,6 +1223,7 @@ class TestDistAttnSolver(DistTestBase):
         is_q_permutable = True
         is_k_permutable = True
 
+        # TODO: test top-p minhp dispatch alg
         dispatch_config = DispatchConfig(alg=MinHeapDispatchAlg())
 
         # ------------  init SimpleNamespace class ------------ #
@@ -2265,6 +2267,7 @@ class TestDistAttnSolver(DistTestBase):
         is_q_permutable = True
         is_k_permutable = True
 
+        # TODO: test top-p minhp dispatch alg
         dispatch_config = DispatchConfig(alg=MinHeapDispatchAlg())
 
         # ------------  init SimpleNamespace class ------------ #

@@ -6,9 +6,10 @@ import numpy as np
 import torch
 
 from dffa.common.enum import AttnMaskType
-from dffa.common.mask import AttnMask, make_causal_mask
+from dffa.common.mask import AttnMask
 from dffa.common.range import AttnRange
 from dffa.common.ranges import AttnRanges
+from dffa.utils import make_causal_mask
 
 
 class TestAttnMask(TestCase):

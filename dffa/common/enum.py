@@ -37,6 +37,8 @@ class DispatchAlgType(Enum):
     DYNAMIC_PROGRAMMING = "dynamic_programming"
     BINARY_SEARCH = "binary_search"
     MIN_HEAP = "min_heap"
+    TOOPP_HEAP = "topp_heap"
+    BACKTRACKING_PRUNING = "backtracing_pruning"
 
 
 class OverlapAlgType(Enum):

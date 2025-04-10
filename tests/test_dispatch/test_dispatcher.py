@@ -70,6 +70,7 @@ class TestDispatcher(DistTestBase):
 
         chunk_size = 4
         seq_dim = 0
+        # TODO: test top-p minhp dispatch alg
         dispatch_config = DispatchConfig(alg=MinHeapDispatchAlg())
 
         # --------------      init global q, k       -------------- #

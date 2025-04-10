@@ -195,7 +195,7 @@ class TestDistAttnRuntimeMgr(DistTestBase):
             q=local_q,
             k=xattn_k,
             v=xattn_v,
-            **host_xattn_attn_arg.to_ffa_args(),
+            **host_xattn_attn_arg.to_ffa_args(is_bwd=False),
         )
 
         total_o = dist_attn_runtime_mgr.undispatch_qo(local_o)
@@ -215,7 +215,7 @@ class TestDistAttnRuntimeMgr(DistTestBase):
             q=total_q,
             k=xattn_k,
             v=xattn_v,
-            **total_xattn_attn_arg.to_ffa_args(),
+            **total_xattn_attn_arg.to_ffa_args(is_bwd=False),
         )
 
         dffa.testing.assert_close(

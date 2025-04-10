@@ -111,8 +111,8 @@ if __name__ == "__main__":
     # -------------------       init dffa   ------------------- #
 
     # dffa config
-    # chunk_size = q_block_size # set to q block size
-    chunk_size = 480
+    chunk_size = q_block_size * 10
+    # TODO: test top-p minhp dispatch alg
     dispatch_config = DispatchConfig(alg=MinHeapDispatchAlg())
     overlap_config = OverlapConfig(
         # enable=False,

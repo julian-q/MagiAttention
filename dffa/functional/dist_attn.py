@@ -277,6 +277,8 @@ class DistFlashAttnRuntime:
         else:
             attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
 
+        skip_attn = attn_arg.can_skip(is_bwd=False)
+
         # DE-BUG
         logger.debug(
             f"RANK: {dist.get_rank()}, {q.shape=}, {kv.shape=}, "
@@ -285,7 +287,7 @@ class DistFlashAttnRuntime:
         )
 
         # 计算attn
-        if attn_arg.skip_attn:
+        if skip_attn:
             out = torch.empty_like(q)
             num_tokens_q, num_heads, _ = q.shape
 
@@ -315,7 +317,7 @@ class DistFlashAttnRuntime:
                         q=q,
                         k=k,
                         v=v,
-                        **attn_arg.to_ffa_args(),
+                        **attn_arg.to_ffa_args(is_bwd=False),
                         softmax_scale=q.shape[-1] ** -0.5,
                         deterministic=deterministic,
                         softcap=0.0,
@@ -326,7 +328,7 @@ class DistFlashAttnRuntime:
                 # TODO: put this logic into kernel
                 out_zero_fill_correction(out, attn_arg.out_zero_fill_ranges)
 
-        return out, lse, attn_arg.skip_attn
+        return out, lse, skip_attn
 
     @nvtx.instrument_nvtx
     def attn_bwd_partial(
@@ -352,7 +354,9 @@ class DistFlashAttnRuntime:
         else:
             attn_arg = self.calc_meta.remote_attn_args_list[overlap_stage]
 
-        if attn_arg.skip_attn:
+        skip_attn = attn_arg.can_skip(is_bwd=True)
+
+        if skip_attn:
             partial_dq, partial_dkv = torch.empty_like(q), torch.empty_like(kv)
         else:
             k, v = self.chunk_kv(kv)
@@ -375,7 +379,7 @@ class DistFlashAttnRuntime:
                     v=v,
                     out=o,
                     softmax_lse=lse,
-                    **attn_arg.to_ffa_args(),
+                    **attn_arg.to_ffa_args(is_bwd=True),
                     softmax_scale=q.shape[-1] ** -0.5,
                     deterministic=deterministic,
                     softcap=0.0,
@@ -383,7 +387,7 @@ class DistFlashAttnRuntime:
                 )
             partial_dkv = torch.cat([partial_dk, partial_dv], dim=0)
 
-        return partial_dq, partial_dkv, attn_arg.skip_attn
+        return partial_dq, partial_dkv, skip_attn
 
     @nvtx.instrument_nvtx
     def reduce_partial_dkv(

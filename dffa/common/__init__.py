@@ -1,5 +1,5 @@
 from . import enum
-from .mask import AttnMask, make_causal_mask
+from .mask import AttnMask
 from .range import AttnRange, RangeError
 from .ranges import AttnRanges
 
@@ -9,5 +9,4 @@ __all__ = [
     "AttnRange",
     "RangeError",
     "AttnRanges",
-    "make_causal_mask",
 ]

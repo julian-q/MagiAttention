@@ -482,6 +482,7 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
         device = torch.cuda.current_device()
 
         dist_attn_config = DistAttnConfig(
+            # TODO: test top-p minhp dispatch alg
             dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
             overlap_config=OverlapConfig(
                 **{
@@ -766,17 +767,6 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
         )
 
         # -----   assert close for bwd dk   ---- #
-
-        # XXX: For test_case='world_size=[1] x random_causal_mapping=[True]':
-        # dk_norm or dv_norm can not pass the 2.0 norm_rtol_ratio
-        # which seems like a kernel accumulation error
-        # HACK: since only this test case is failed, we bypass it for now by doubling the dk/dv tolerance,
-        # but need to fix it asap
-        norm_rtol_ratio *= (
-            2.0
-            if self.world_size == 1 and not is_list_value_all(is_causal_mapping, False)
-            else 1.0
-        )
 
         # fa style with Linf norm
         dk_norm = calc_inf_norm(grad_total_k, grad_total_k_ref_high_precision)

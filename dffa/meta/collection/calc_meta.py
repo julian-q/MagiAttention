@@ -1,9 +1,11 @@
+from bisect import bisect_left
+from collections import defaultdict
 from dataclasses import dataclass
 
 import torch
 
 import dffa
-from dffa.common.ranges import AttnRanges
+from dffa.common import AttnRange, AttnRanges
 from dffa.utils import is_list_value_all
 
 
@@ -36,44 +38,51 @@ class AttnArg:
                 self.is_causal_mapping, False, allow_empty=True
             ), "Only supports all full attn mask for now."
 
+        # init out zero-fill ranges for fwd out correction
+        # TODO: put this logic into kernel
+        self._init_out_zero_fill_ranges()
+
+        # filter empty, and overwrite the original inputs
+        self._filter_out_empty_slice()
+
+        # init fwd ffa args dict
+        # NOTE: we need to init fwd args first before bwd args
+        self._init_ffa_fwd_args_dict()
+
+        # init ffa args for bwd
+        self._init_ffa_bwd_args_dict()
+
+    def _filter_out_empty_slice(self) -> None:
+        filtered_q_ranges = AttnRanges()
+        filtered_k_ranges = AttnRanges()
+        filtered_is_causal_mapping: list[bool] = []
+
         # filter out k_ranges with seqlen == 0
-        self.q_ranges = AttnRanges.from_ranges(
-            [
-                q_range
-                for q_range, k_range in zip(self.q_ranges, self.k_ranges)
-                if k_range.seqlen > 0
-            ]
-        )
-        self.k_ranges = AttnRanges.from_ranges(
-            [
-                k_range
-                for q_range, k_range in zip(self.q_ranges, self.k_ranges)
-                if k_range.seqlen > 0
-            ]
-        )
-        self.is_causal_mapping = [
-            is_causal_mapping
-            for q_range, k_range, is_causal_mapping in zip(
-                self.q_ranges, self.k_ranges, self.is_causal_mapping
-            )
-            if k_range.seqlen > 0
-        ]
+        for q_range, k_range, is_causal_mapping in zip(
+            self.q_ranges, self.k_ranges, self.is_causal_mapping
+        ):
+            if not k_range.is_empty():
+                filtered_q_ranges.append(q_range)
+                filtered_k_ranges.append(k_range)
+                filtered_is_causal_mapping.append(is_causal_mapping)
 
-        batch_size = len(self.q_ranges)
-
-        # init tensors
-        self.q_ranges_tensor = self.q_ranges.to_tensor(
-            device=torch.cuda.current_device()
-        )
-        self.k_ranges_tensor = self.k_ranges.to_tensor(
-            device=torch.cuda.current_device()
-        )
-        self.is_causal_mapping_tensor = torch.tensor(
-            self.is_causal_mapping, dtype=torch.bool, device=torch.cuda.current_device()
+        # overwrite the original inputs
+        (
+            self.q_ranges,
+            self.k_ranges,
+            self.is_causal_mapping,
+        ) = (
+            filtered_q_ranges,
+            filtered_k_ranges,
+            filtered_is_causal_mapping,
         )
 
         # sanity check
         if dffa.is_sanity_check_enable():
+            # shape check
+            assert (
+                len(self.q_ranges) == len(self.k_ranges) == len(self.is_causal_mapping)
+            )
             # check non-empty k ranges
             for k_range in self.k_ranges:
                 assert not k_range.is_empty()
@@ -81,65 +90,226 @@ class AttnArg:
             # check non-overlapped q ranges
             assert self.q_ranges.is_non_overlap()
 
-            # check tensor shape
-            if batch_size > 0:
-                assert self.q_ranges_tensor.shape == torch.Size(
-                    [batch_size, 2]
-                ), f"{self.q_ranges_tensor.shape=}, {batch_size=}"
-                assert self.k_ranges_tensor.shape == torch.Size(
-                    [batch_size, 2]
-                ), f"{self.k_ranges_tensor.shape=}, {batch_size=}"
-                assert self.is_causal_mapping_tensor.shape == torch.Size(
-                    [
-                        batch_size,
-                    ]
-                ), f"{self.is_causal_mapping_tensor.shape=}, {batch_size=}"
-
-        # init max seqlen
-        if batch_size > 0:
-            self.skip_attn = False
-            self.max_seqlen_q = self.q_ranges.max_seqlen
-            self.max_seqlen_k = self.k_ranges.max_seqlen
-        elif batch_size == 0:  # no calc needed
-            self.skip_attn = True
-            self.max_seqlen_q = 0
-            self.max_seqlen_k = 0
-        else:
-            raise ValueError(f"Invalid batch size: {batch_size}")
-
-        # init ffa args dict
-        self.ffa_args_dict = {
-            "q_ranges": self.q_ranges_tensor,
-            "k_ranges": self.k_ranges_tensor,
-            "is_causal_mapping": self.is_causal_mapping_tensor,
-            "max_seqlen_q": self.max_seqlen_q,
-            "max_seqlen_k": self.max_seqlen_k,
-        }
-
-        # init out zero-fill ranges
-        # TODO: put this logic into kernel
+    def _init_out_zero_fill_ranges(self) -> None:
         start, end = 0, self.shard_seqlen_q
-        self.out_zero_fill_ranges: list[tuple[int, int]] = []
+        out_zero_fill_ranges: list[tuple[int, int]] = []
         for q_range in self.q_ranges:
             if start < q_range.start:
-                self.out_zero_fill_ranges.append((start, q_range.start))
+                out_zero_fill_ranges.append((start, q_range.start))
             start = q_range.end
         if start < end:
-            self.out_zero_fill_ranges.append((start, end))
+            out_zero_fill_ranges.append((start, end))
 
         self.out_zero_fill_ranges = (
-            AttnRanges.from_ranges(self.out_zero_fill_ranges).merge().to_naive_ranges()
+            AttnRanges.from_ranges(out_zero_fill_ranges).merge().to_naive_ranges()
         )
 
-    def to_ffa_args(self) -> dict:
-        return self.ffa_args_dict
+    def _init_ffa_fwd_args_dict(self) -> None:
+        # init skip attn flag
+        batch_size_fwd = len(self.q_ranges)
+        self.skip_attn_fwd = batch_size_fwd == 0
+
+        # init tensors
+        q_ranges_tensor_fwd = self.q_ranges.to_tensor(
+            device=torch.cuda.current_device()
+        )
+        k_ranges_tensor_fwd = self.k_ranges.to_tensor(
+            device=torch.cuda.current_device()
+        )
+        is_causal_mapping_tensor_fwd = torch.tensor(
+            self.is_causal_mapping, dtype=torch.bool, device=torch.cuda.current_device()
+        )
+
+        # sanity check
+        if dffa.is_sanity_check_enable():
+            # check tensor shape
+            if not self.skip_attn_fwd:
+                assert q_ranges_tensor_fwd.shape == torch.Size([batch_size_fwd, 2])
+                assert k_ranges_tensor_fwd.shape == torch.Size([batch_size_fwd, 2])
+                assert is_causal_mapping_tensor_fwd.shape == torch.Size(
+                    [batch_size_fwd]
+                )
+
+        # init max seqlen
+        if self.skip_attn_fwd:  # no calc needed
+            max_seqlen_q_fwd = 0
+            max_seqlen_k_fwd = 0
+        else:
+            max_seqlen_q_fwd = self.q_ranges.max_seqlen
+            max_seqlen_k_fwd = self.k_ranges.max_seqlen
+
+        self.ffa_fwd_args_dict = dict(
+            q_ranges=q_ranges_tensor_fwd,
+            k_ranges=k_ranges_tensor_fwd,
+            is_causal_mapping=is_causal_mapping_tensor_fwd,
+            max_seqlen_q=max_seqlen_q_fwd,
+            max_seqlen_k=max_seqlen_k_fwd,
+        )
+
+    def _init_ffa_bwd_args_dict(self) -> None:
+        # NOTE: the feature `refactor_bwd_args` now is only experimental
+        # so here's an env variable switch to turn it on/off
+        if dffa.is_refactor_bwd_args_enable():
+            # refactor ranges and types for bwd dkv load-store efficiency
+            (
+                self.q_ranges_bwd,
+                self.k_ranges_bwd,
+                self.is_causal_mapping_bwd,
+            ) = self._refactor_bwd_ranges_and_types()
+
+            # init skip attn flag
+            batch_size_bwd = len(self.q_ranges_bwd)
+            self.skip_attn_bwd = batch_size_bwd == 0
+
+            # init tensors
+            q_ranges_tensor_bwd = self.q_ranges_bwd.to_tensor(
+                device=torch.cuda.current_device()
+            )
+            k_ranges_tensor_bwd = self.k_ranges_bwd.to_tensor(
+                device=torch.cuda.current_device()
+            )
+            is_causal_mapping_tensor_bwd = torch.tensor(
+                self.is_causal_mapping_bwd,
+                dtype=torch.bool,
+                device=torch.cuda.current_device(),
+            )
+
+            # sanity check
+            if dffa.is_sanity_check_enable():
+                # check tensor shape
+                if batch_size_bwd > 0:
+                    assert q_ranges_tensor_bwd.shape == torch.Size([batch_size_bwd, 2])
+                    assert k_ranges_tensor_bwd.shape == torch.Size([batch_size_bwd, 2])
+                    assert is_causal_mapping_tensor_bwd.shape == torch.Size(
+                        [batch_size_bwd]
+                    )
+
+            # init max seqlen of fwd and bwd
+            if self.skip_attn_bwd:  # no calc needed
+                max_seqlen_q_bwd = 0
+                max_seqlen_k_bwd = 0
+            else:
+                max_seqlen_q_bwd = self.q_ranges_bwd.max_seqlen
+                max_seqlen_k_bwd = self.k_ranges_bwd.max_seqlen
+
+            self.ffa_bwd_args_dict = dict(
+                q_ranges=q_ranges_tensor_bwd,
+                k_ranges=k_ranges_tensor_bwd,
+                is_causal_mapping=is_causal_mapping_tensor_bwd,
+                max_seqlen_q=max_seqlen_q_bwd,
+                max_seqlen_k=max_seqlen_k_bwd,
+            )
+        else:
+            # just copy args from fwd
+            self.skip_attn_bwd = self.skip_attn_fwd
+            self.ffa_bwd_args_dict = self.ffa_fwd_args_dict
+            self.q_ranges_bwd = self.q_ranges
+            self.k_ranges_bwd = self.k_ranges
+            self.is_causal_mapping_bwd = self.is_causal_mapping
+
+    def _refactor_bwd_ranges_and_types(
+        self,
+    ) -> tuple[AttnRanges, AttnRanges, list[bool]]:
+        """Refactor bwd ffa args including q,k ranges and mask types
+        from fwd ffa args (i.e. original ffa args) for bwd dkv load-store efficiency
+        TODO:
+            1. consider restricting the "refactor degree"
+                to avoid insufficient number of blocks in grid to be parallelized
+            2. support causal mask
+            3. test the actual performance together with
+                the top-p minhp dispatcher with IOU affinity considered
+        """
+        # get fwd ranges and mask type
+        q_ranges_fwd, k_ranges_fwd, is_causal_mapping_fwd = (
+            self.q_ranges,
+            self.k_ranges,
+            self.is_causal_mapping,
+        )
+
+        # TODO: support causal mask
+        assert is_list_value_all(
+            is_causal_mapping_fwd,
+            False,
+            allow_empty=True,
+        ), f"Only support all full masks for now, but got {is_causal_mapping_fwd=}"
+
+        # init two map q_range->k_ranges and k_range->q_ranges
+        map_slice_q_range_to_k_ranges: defaultdict[AttnRange, AttnRanges] = defaultdict(
+            AttnRanges
+        )
+        map_slice_k_range_to_q_ranges: defaultdict[AttnRange, AttnRanges] = defaultdict(
+            AttnRanges
+        )
+
+        # get boundary list from fwd k_ranges
+        k_ranges_boundary: list[int] = k_ranges_fwd.points
+
+        for q_range_fwd, k_range_fwd in zip(q_ranges_fwd, k_ranges_fwd):
+            # get start and end of k_range of current slice
+            slice_k_range_start, slice_k_range_end = (
+                k_range_fwd.start,
+                k_range_fwd.end,
+            )
+
+            # find start and end index in the boundary list
+            boundary_left_index = bisect_left(k_ranges_boundary, slice_k_range_start)
+            boundary_right_index = bisect_left(k_ranges_boundary, slice_k_range_end)
+
+            # split slice in k_range dimention with boundary list
+            for boundary_index in range(boundary_left_index, boundary_right_index):
+                boundary_start, boundary_end = (
+                    k_ranges_boundary[boundary_index],
+                    k_ranges_boundary[boundary_index + 1],
+                )
+
+                # add split_k_range->q_range to map
+                k_range_this_slice = AttnRange(start=boundary_start, end=boundary_end)
+                map_slice_k_range_to_q_ranges[k_range_this_slice].append(q_range_fwd)
+
+        # sort k_range->q_ranges map with k_range.start
+        k_range_q_ranges_tuples: list[tuple[AttnRange, AttnRanges]] = sorted(
+            map_slice_k_range_to_q_ranges.items(), key=lambda t: t[0].start
+        )
+
+        # Convert the content in the k_range->q_ranges map to the q_range->k_ranges map.
+        for k_range, q_ranges in k_range_q_ranges_tuples:
+            q_ranges = q_ranges.merge()
+            for q_range in q_ranges:
+                map_slice_q_range_to_k_ranges[q_range].append(k_range)
+
+        # sort q_range->k_ranges map with q_range.start
+        q_range_k_ranges_tuples: list[tuple[AttnRange, AttnRanges]] = sorted(
+            map_slice_q_range_to_k_ranges.items(), key=lambda t: t[0].start
+        )
+
+        # initial ranges of bwd
+        q_ranges_bwd, k_ranges_bwd = AttnRanges(), AttnRanges()
+
+        # merge k_ranges in the map and append to ranges of bwd
+        for q_range, k_ranges in q_range_k_ranges_tuples:
+            k_ranges = k_ranges.merge()
+            for k_range in k_ranges:
+                q_ranges_bwd.append(q_range)
+                k_ranges_bwd.append(k_range)
+
+        is_causal_mapping_bwd = [False] * len(q_ranges_bwd)
+
+        return (
+            q_ranges_bwd,
+            k_ranges_bwd,
+            is_causal_mapping_bwd,
+        )
+
+    def to_ffa_args(self, is_bwd: bool = False) -> dict:
+        return self.ffa_bwd_args_dict if is_bwd else self.ffa_fwd_args_dict
+
+    def can_skip(self, is_bwd: bool = False) -> bool:
+        return self.skip_attn_bwd if is_bwd else self.skip_attn_fwd
 
     def __repr__(self) -> str:
         return (
             f"AttnArg(q_ranges={self.q_ranges}, k_ranges={self.k_ranges}, is_causal_mapping={self.is_causal_mapping}, "
-            f"shard_seqlen_q={self.shard_seqlen_q}, total_area={self.total_area}, "
-            f"max_seqlen_q={self.max_seqlen_q}, max_seqlen_k={self.max_seqlen_k}, skip_attn={self.skip_attn}, "
-            f"out_zero_fill_ranges={self.out_zero_fill_ranges})"
+            f"shard_seqlen_q={self.shard_seqlen_q}, total_area={self.total_area}"
         )
 
 

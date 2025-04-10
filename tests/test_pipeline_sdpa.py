@@ -576,6 +576,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         device = torch.cuda.current_device()
 
         dist_attn_config = DistAttnConfig(
+            # TODO: test top-p minhp dispatch alg
             dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
             overlap_config=OverlapConfig(
                 **{k: v for k, v in overlap_config.items() if k not in (NAME,)}

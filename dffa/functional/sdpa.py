@@ -299,9 +299,9 @@ def sdpa_bwd(
 
     # construct attn_mask from ranges
     attn_mask = get_attn_mask_from_ranges(
-        q_ranges=attn_arg.q_ranges.to_naive_ranges(),
-        k_ranges=attn_arg.k_ranges.to_naive_ranges(),
-        is_causal_mapping=attn_arg.is_causal_mapping,
+        q_ranges=attn_arg.q_ranges_bwd.to_naive_ranges(),
+        k_ranges=attn_arg.k_ranges_bwd.to_naive_ranges(),
+        is_causal_mapping=attn_arg.is_causal_mapping_bwd,
         total_seqlen_q=q.shape[-2],
         total_seqlen_k=k.shape[-2],
     )

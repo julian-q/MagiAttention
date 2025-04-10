@@ -5,33 +5,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dffa.utils import is_list_value_all, repr_matrix, vis_matrix
+from dffa.utils import is_list_value_all, make_causal_mask, repr_matrix, vis_matrix
 
 from .enum import AttnMaskType
 from .range import AttnRange
 from .ranges import AttnRanges
-
-
-def make_causal_mask(
-    seqlen_q: int,
-    seqlen_k: int,
-    align: str = "bottom-right",
-    dtype=torch.int32,
-    device: str = "cpu",
-) -> torch.Tensor:
-    max_seqlen = max(seqlen_q, seqlen_k)
-    causal_mask = torch.tril(torch.ones((max_seqlen, max_seqlen))).to(
-        dtype=dtype, device=device
-    )
-
-    if align == "bottom-right":
-        causal_mask = causal_mask[-seqlen_q:, -seqlen_k:]
-    elif align == "top-left":
-        causal_mask = causal_mask[:seqlen_q, :seqlen_k]
-    else:
-        raise ValueError(f"Invalid alignment: {align}")
-
-    return causal_mask
 
 
 class AttnMask(nn.Module):
