@@ -13,7 +13,7 @@ from dffa.common.ranges import AttnRanges
 from dffa.testing.dist_common import DistTestBase, with_comms
 
 # isort: split
-from exps.attn.baselines.ulysses import TEUlysses
+from exps.dist_attn.baselines.ulysses import TEUlysses
 
 
 @dataclass

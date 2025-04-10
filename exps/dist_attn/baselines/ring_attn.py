@@ -6,7 +6,7 @@ from dffa.common.enum import AttnMaskType
 from dffa.common.ranges import AttnRanges
 
 # isort: split
-from exps.attn.baselines.te_ring_attn_utils import (
+from exps.dist_attn.baselines.te_ring_attn_utils import (
     AttnFuncTERingAttnWithKVAG,
     AttnFuncTERingAttnWithKVP2P,
     compute_cu_seqlens_padded_with_attention_mask,

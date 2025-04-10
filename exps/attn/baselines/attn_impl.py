@@ -4,15 +4,21 @@ from typing import Optional
 
 import torch
 from flash_attn import flash_attn_func as fa2_func
+
+# from flash_attn_interface import flash_attn_func as fa3_func # TODO: support fa3 interface
+from flash_attn_interface import flex_flash_attn_func as ffa_func
+from packaging import version
 from torch.nn.functional import scaled_dot_product_attention as sdpa_func
 
-# -------------------       attn impl utils     ------------------- #
+if version.parse(torch.__version__) > version.parse("2.4"):
+    # NOTE: in benchmarking, we should explicitly allow bf16/fp16 reduction for sdpa
+    # by setting `torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)`
+    # due to the new feature since torch2.5:
+    # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-reduction-for-fp16-and-bf16-in-scaled-dot-product-attention-sdpa
+    torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
 
 
-# from flash_attn_interface import _flex_flash_attn_forward, _flex_flash_attn_backward
-
-
-def sdpa_naive_func(
+def torch_attn_func(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -73,12 +79,16 @@ attn_impls = namedtuple(
     "AttnImpls",
     field_names=[
         "fa2_func",
+        # "fa3_func", # TODO: support fa3 interface
+        "ffa_func",
         "sdpa_func",
-        "sdpa_naive_func",
+        "torch_attn_func",
     ],
     defaults=[
         fa2_func,
+        # fa3_func, # TODO: support fa3 interface
+        ffa_func,
         sdpa_func,
-        sdpa_naive_func,
+        torch_attn_func,
     ],
 )()

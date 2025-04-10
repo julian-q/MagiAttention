@@ -41,3 +41,45 @@ def instrument_nvtx(func: F) -> F:
         return ret_val
 
     return cast(F, wrapped_fn)
+
+
+def switch_profile(
+    iter_id: int,
+    start: int,
+    end: int,
+    profile_ranks: list[int],
+    event_name: str | None = None,
+) -> None:
+    """
+    Controls the profiler state based on the iteration number. Turns on profiling
+    at the start iteration and turns it off at the end iteration.
+
+    Args:
+    - iter_id: The current iteration number.
+    - start: The iteration number to start profiling.
+    - end: The iteration number to end profiling.
+    - profile_ranks: List of ranks to be profiled.
+    - event_name: Custom name for the profiling event. If None, defaults to 'iter{iter_id}'.
+    """
+    if torch.distributed.get_rank() not in profile_ranks:
+        return
+
+    if event_name is None:
+        event_name = f"iter{iter_id}"
+
+    # Start profiling
+    if iter_id == start:
+        torch.cuda.cudart().cudaProfilerStart()
+        emit_nvtx_ctx = torch.autograd.profiler.emit_nvtx(record_shapes=True)
+        emit_nvtx_ctx.__enter__()
+        torch.cuda.nvtx.range_push(event_name)
+
+    # Stop profiling
+    elif iter_id == end:
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.cudart().cudaProfilerStop()
+
+    # Continue profiling
+    elif iter_id > start and iter_id < end:
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_push(event_name)

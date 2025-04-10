@@ -1,5 +1,5 @@
-from .attn import attn_impls
 from .bench import Benchmark, do_bench, do_bench_flops, do_bench_mem, perf_report
+from .image_grid import make_img_grid
 
 __all__ = [
     "Benchmark",
@@ -7,5 +7,5 @@ __all__ = [
     "do_bench_flops",
     "do_bench_mem",
     "do_bench",
-    "attn_impls",
+    "make_img_grid",
 ]

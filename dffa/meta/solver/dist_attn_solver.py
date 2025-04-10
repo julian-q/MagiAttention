@@ -394,11 +394,6 @@ class DistAttnSolver:
             attn_calc_slice_global_list=bucket_this_rank.attn_slices,
         )
 
-        # init remote rank entry for high-bandwidth domain stage this rank
-        remote_rank_entry_for_this_domain = self._init_remote_rank_entry_this_domain(
-            host_rank_entry_this_rank=self.host_rank_entry_this_rank,
-        )
-
         # init remote rank entry for each stage for this rank
         self.remote_rank_entry_per_stage_this_rank = (
             self._init_remote_rank_entry_per_stage_this_rank(
@@ -406,15 +401,22 @@ class DistAttnSolver:
             )
         )
 
-        # HACK: prepend remote rank entry for high-bandwidth domain as the first stage
-        # and the overlap degree need plus 1, since hb remote rank entry is unaware by the overlap solver
-        # FIXME: therefore, the overlap solver will wrongly use the remote comm in first lb domain stage
-        # to overlap with the host calc, instead of the remote comm in hb domain
-        self.remote_rank_entry_per_stage_this_rank.insert(
-            0,
-            remote_rank_entry_for_this_domain,
-        )
-        self.overlap_degree += 1
+        if self.high_bandwith_domain_size > 1:
+            # init remote rank entry for high-bandwidth domain stage this rank
+            remote_rank_entry_for_this_domain = (
+                self._init_remote_rank_entry_this_domain(
+                    host_rank_entry_this_rank=self.host_rank_entry_this_rank,
+                )
+            )
+            # HACK: prepend remote rank entry for high-bandwidth domain as the first stage
+            # and the overlap degree need plus 1, since hb remote rank entry is unaware by the overlap solver
+            # FIXME: therefore, the overlap solver will wrongly use the remote comm in first lb domain stage
+            # to overlap with the host calc, instead of the remote comm in hb domain
+            self.remote_rank_entry_per_stage_this_rank.insert(
+                0,
+                remote_rank_entry_for_this_domain,
+            )
+            self.overlap_degree += 1
 
         # init remote rank entry for each rank for each stage
         self.remote_rank_entry_per_rank_per_stage = (

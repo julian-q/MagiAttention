@@ -1,9 +1,10 @@
+import datetime
 from dataclasses import dataclass
 from typing import Optional
 
+import deepspeed
+import deepspeed.comm as dist
 import torch
-import torch.distributed
-import torch.distributed as dist
 from flash_attn import flash_attn_varlen_func
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
@@ -13,12 +14,14 @@ from dffa.common.ranges import AttnRanges
 from dffa.testing.dist_common import DistTestBase, with_comms
 
 # isort: split
-from exps.attn.baselines.loongtrain import LoongTrain, ParallelMode
+from exps.dist_attn.baselines.ulysses import DSUlysses
 
 
 @dataclass
-class LoongTrainAttnConfig:
+class DsUlysessAttnConfig:
+    # 总序列长度
     total_seqlen: int
+    # 头数
     num_heads: int
     head_dim: int
     dtype: torch.dtype
@@ -28,7 +31,7 @@ class LoongTrainAttnConfig:
 
 
 @dataclass
-class LoongTrainAttnArg:
+class DsUlysessAttnArg:
     seqlens: torch.Tensor
     is_causal: bool
 
@@ -62,176 +65,12 @@ class LoongTrainAttnArg:
             self.attn_mask_type = AttnMaskType.FULL
 
 
-@dataclass
-class AttnConfig2D:
-    head_size: int
-    context_size: int
-    slide_window_size: int
-    head_first: bool
-
-
-class Initializer_2D_SEQUENCE_PARALLEL:
-    def __init__(
-        self,
-        head_size,
-        head_first,
-        context_size,
-        window_size,
-        world_size,
-        rank,
-    ):
-        self.head_size = head_size
-        self.context_size = context_size
-        self.window_size = window_size
-        self.head_first = head_first
-        self.sequence_parallel_size = world_size
-        self.interleaved = False
-        self.rank = rank
-
-        assert self.context_size * self.head_size == self.sequence_parallel_size
-
-        self.num_head_pgs = self.context_size
-        self.num_context_pgs = self.head_size
-
-        self.groups = {
-            ParallelMode.HEAD: None,
-            ParallelMode.CONTEXT: None,
-            ParallelMode.INTRA_WINDOW: None,
-            ParallelMode.INTER_WINDOW: None,
-            ParallelMode.DKV_INTRA_WINDOW: None,
-            ParallelMode.DKV_INTER_WINDOW: None,
-        }
-        self.cp_ranks = {
-            ParallelMode.HEAD: None,
-            ParallelMode.CONTEXT: None,
-            ParallelMode.INTRA_WINDOW: None,
-            ParallelMode.INTER_WINDOW: None,
-            ParallelMode.DKV_INTRA_WINDOW: None,
-            ParallelMode.DKV_INTER_WINDOW: None,
-        }
-
-    def get_sliding_window_pg(self, window_num, context_ranks):
-        # context_ranks = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-        # window_size = 4
-        # window_num = 4
-        # intra_window = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]]
-        # inter_window = [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]]
-
-        # create the intra_window process group when using sliding window
-        for j in range(window_num):
-            intra_window_ranks = context_ranks[
-                j * self.window_size : (j + 1) * self.window_size
-            ]
-
-            # intra_window
-            intra_window_group = dist.new_group(intra_window_ranks)
-            if self.rank in intra_window_ranks:
-                self.groups[ParallelMode.INTRA_WINDOW] = intra_window_group
-                self.cp_ranks[ParallelMode.INTRA_WINDOW] = intra_window_ranks
-
-            # dkv_intra_window
-            dkv_intra_window_group = dist.new_group(intra_window_ranks)
-            if self.rank in intra_window_ranks:
-                self.groups[ParallelMode.DKV_INTRA_WINDOW] = dkv_intra_window_group
-                self.cp_ranks[ParallelMode.DKV_INTRA_WINDOW] = intra_window_ranks
-
-        # create the inter_window process group when using sliding window
-        for j in range(self.window_size):
-            inter_window_ranks = []
-            for t in range(window_num):
-                inter_window_ranks.append(context_ranks[t * self.window_size + j])
-
-            # inter_window
-            inter_window_group = dist.new_group(inter_window_ranks)
-            if self.rank in inter_window_ranks:
-                self.groups[ParallelMode.INTER_WINDOW] = inter_window_group
-                self.cp_ranks[ParallelMode.INTER_WINDOW] = inter_window_ranks
-
-            # dkv_inter_window
-            dkv_inter_window_group = dist.new_group(inter_window_ranks)
-            if self.rank in inter_window_ranks:
-                self.groups[ParallelMode.DKV_INTER_WINDOW] = dkv_inter_window_group
-                self.cp_ranks[ParallelMode.DKV_INTER_WINDOW] = inter_window_ranks
-
-    def init_dist_group(self):
-        if self.head_first:
-            # head process group
-            for i in range(self.num_head_pgs):
-                head_ranks = list(
-                    range(
-                        i * self.head_size,
-                        (i + 1) * self.head_size,
-                    )
-                )
-                head_pg = dist.new_group(head_ranks)
-                if self.rank in head_ranks:
-                    self.groups[ParallelMode.HEAD] = head_pg
-                    self.cp_ranks[ParallelMode.HEAD] = head_ranks
-
-            for i in range(self.num_context_pgs):
-                assert (
-                    self.context_size % self.window_size == 0
-                ), "the window size should be divided by the context_size."
-                window_num = self.context_size // self.window_size
-
-                context_ranks = list(
-                    range(i, self.sequence_parallel_size, self.num_context_pgs)
-                )
-                context_pg = dist.new_group(context_ranks)
-                if self.rank in context_ranks:
-                    self.groups[ParallelMode.CONTEXT] = context_pg
-                    self.cp_ranks[ParallelMode.CONTEXT] = context_ranks
-                    self.get_sliding_window_pg(window_num, context_ranks)
-        else:
-            for i in range(self.num_context_pgs):
-                context_ranks = list(
-                    range(i * self.context_size, (i + 1) * self.context_size)
-                )
-
-                context_pg = dist.new_group(context_ranks)
-                if self.rank in context_ranks:
-                    self.groups[ParallelMode.CONTEXT] = context_pg
-                    self.cp_ranks[ParallelMode.CONTEXT] = context_ranks
-                    self.get_sliding_window_pg(window_num, context_ranks)
-
-                assert (
-                    self.context_size % self.window_size == 0
-                ), "the window size should be divided by the context_size."
-                window_num = self.context_size // self.window_size
-
-                # self.get_sliding_window_pg(window_num, context_ranks)
-
-            # head process group
-            for i in range(self.num_head_pgs):
-                head_ranks = list(
-                    range(i, self.sequence_parallel_size, self.num_head_pgs)
-                )
-                head_pg = dist.new_group(head_ranks)
-
-                if self.rank in head_ranks:
-                    self.groups[ParallelMode.HEAD] = head_pg
-                    self.cp_ranks[ParallelMode.HEAD] = head_ranks
-
-        return self.groups, self.cp_ranks
-
-
-class TestTeUlysessAttn(DistTestBase):
+class TestDsUlysessAttn(DistTestBase):
     @property
     def process_group(self):
-        config_2d = AttnConfig2D(
-            head_size=1, context_size=4, slide_window_size=2, head_first=True
-        )
-        initializer = Initializer_2D_SEQUENCE_PARALLEL(
-            head_size=config_2d.head_size,
-            head_first=config_2d.head_first,
-            context_size=config_2d.context_size,
-            window_size=config_2d.slide_window_size,
-            world_size=self.world_size,
-            rank=self.rank,
-        )
-
-        cp_group, cp_ranks = initializer.init_dist_group()
-        return cp_group, config_2d
+        ulysses_ranks = list(range(0, self.world_size))
+        group = dist.new_group(ulysses_ranks)
+        return group
 
     @property
     def world_size(self) -> int:
@@ -240,6 +79,34 @@ class TestTeUlysessAttn(DistTestBase):
     @property
     def seed(self) -> int:
         return 42
+
+    def init_pg(self) -> None:
+        if "nccl" in self.backend and torch.cuda.device_count() < self.world_size:
+            raise RuntimeError(
+                f"nccl backend requires {self.world_size} GPUs, but only {torch.cuda.device_count()} are available"
+            )
+
+        if self.backend not in ["nccl", "gloo", "mpi", "cpu:gloo,cuda:nccl"]:
+            raise RuntimeError(f"Backend {self.backend} not supported!")
+
+        deepspeed.init_distributed(
+            dist_backend=self.backend,
+            world_size=self.world_size,
+            rank=self.rank,
+            init_method=f"file://{self.file_name}",
+            timeout=datetime.timedelta(minutes=30),
+        )
+        # dist.init_process_group(
+        #     backend=self.backend,
+        #     world_size=self.world_size,
+        #     rank=self.rank,
+        #     init_method=f"file://{self.file_name}",  # noqa
+        #     timeout=datetime.timedelta(minutes=30),
+        # )
+
+        # set device for nccl pg for collectives
+        if "nccl" in self.backend:
+            torch.cuda.set_device(self.rank)
 
     def gen_test_data(self, seqlen, nheads, d, device, dtype, test_bwd):
         # Prepare inputs
@@ -297,7 +164,7 @@ class TestTeUlysessAttn(DistTestBase):
             out_fa.backward(dout)
         return out_fa, lse_fa, q0.grad, k0.grad, v0.grad
 
-    def mytest_loongtrain_dispatch(self, attn_config, attn_arg, rank, device, test_bwd):
+    def mytest_dsulysess_dispatch(self, attn_config, attn_arg, rank, device, test_bwd):
         q, k, v, dout = self.gen_test_data(
             attn_config.total_seqlen,
             attn_config.num_heads,
@@ -312,12 +179,18 @@ class TestTeUlysessAttn(DistTestBase):
         dist.broadcast(v, src=0)
         dist.broadcast(dout, src=0)
 
-        loongtrain = LoongTrain()
+        world_size = self.world_size
+        cp_group = self.process_group
+        cp_stream = None
+        if attn_config.qkv_format == "thd" or attn_config.qkv_format == "bshd":
+            dsulysess_func = DSUlysses(cp_group, 2, 1, sp_stream=cp_stream)
+        else:
+            dsulysess_func = DSUlysses(cp_group, 2, 0, sp_stream=cp_stream)
 
         world_size = self.world_size
-        cp_group, config_2d = self.process_group
+        cp_group = self.process_group
         q_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 q,
                 rank,
                 world_size,
@@ -331,7 +204,7 @@ class TestTeUlysessAttn(DistTestBase):
             .clone()
         )
         k_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 k,
                 rank,
                 world_size,
@@ -345,7 +218,7 @@ class TestTeUlysessAttn(DistTestBase):
             .clone()
         )
         v_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 v,
                 rank,
                 world_size,
@@ -360,7 +233,7 @@ class TestTeUlysessAttn(DistTestBase):
         )
 
         # test dispatch undispatch
-        q_global = loongtrain.undispatch(
+        q_global = dsulysess_func.undispatch(
             q_local,
             rank,
             world_size,
@@ -368,7 +241,7 @@ class TestTeUlysessAttn(DistTestBase):
             qkv_="q",
             qkv_format=attn_config.qkv_format,
         )
-        k_global = loongtrain.undispatch(
+        k_global = dsulysess_func.undispatch(
             k_local,
             rank,
             world_size,
@@ -376,7 +249,7 @@ class TestTeUlysessAttn(DistTestBase):
             qkv_="k",
             qkv_format=attn_config.qkv_format,
         )
-        v_global = loongtrain.undispatch(
+        v_global = dsulysess_func.undispatch(
             v_local,
             rank,
             world_size,
@@ -389,7 +262,7 @@ class TestTeUlysessAttn(DistTestBase):
         assert torch.equal(k, k_global)
         assert torch.equal(v, v_global)
 
-    def mytest_loongtrain_impl(self, attn_config, attn_arg, rank, device, test_bwd):
+    def mytest_dsulysess_impl(self, attn_config, attn_arg, rank, device, test_bwd):
         q, k, v, dout = self.gen_test_data(
             attn_config.total_seqlen,
             attn_config.num_heads,
@@ -404,12 +277,16 @@ class TestTeUlysessAttn(DistTestBase):
         dist.broadcast(v, src=0)
         dist.broadcast(dout, src=0)
 
-        loongtrain = LoongTrain()
-
         world_size = self.world_size
-        cp_group, config_2d = self.process_group
+        cp_group = self.process_group
+        cp_stream = None
+        if attn_config.qkv_format == "thd" or attn_config.qkv_format == "bshd":
+            dsulysess_func = DSUlysses(cp_group, 2, 1, sp_stream=cp_stream)
+        else:
+            dsulysess_func = DSUlysses(cp_group, 2, 0, sp_stream=cp_stream)
+
         q_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 q,
                 rank,
                 world_size,
@@ -423,7 +300,7 @@ class TestTeUlysessAttn(DistTestBase):
             .clone()
         )
         k_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 k,
                 rank,
                 world_size,
@@ -437,7 +314,7 @@ class TestTeUlysessAttn(DistTestBase):
             .clone()
         )
         v_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 v,
                 rank,
                 world_size,
@@ -451,7 +328,7 @@ class TestTeUlysessAttn(DistTestBase):
             .clone()
         )
         dout_local = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 dout,
                 rank,
                 world_size,
@@ -470,9 +347,7 @@ class TestTeUlysessAttn(DistTestBase):
             k_local.requires_grad = True
             v_local.requires_grad = True
 
-        # with torch.cuda.device(device):
-        #     cp_stream = torch.cuda.Stream()  # 创建流
-        local_out, local_lse = loongtrain.apply_attn(
+        local_out, local_lse = dsulysess_func.apply_attn(
             q_local,
             k_local,
             v_local,
@@ -486,7 +361,8 @@ class TestTeUlysessAttn(DistTestBase):
             cp_group=cp_group,
             qkv_format=attn_config.qkv_format,
             dropout_p=attn_config.dropout_p,
-            slide_window_size=config_2d.slide_window_size,
+            cp_stream=cp_stream,
+            use_fused_attention=True,
         )
 
         if test_bwd:
@@ -517,7 +393,7 @@ class TestTeUlysessAttn(DistTestBase):
         )
 
         local_out_ref = (
-            loongtrain.dispatch(
+            dsulysess_func.dispatch(
                 total_out_ref,
                 rank,
                 world_size,
@@ -532,7 +408,7 @@ class TestTeUlysessAttn(DistTestBase):
         )
         if test_bwd:
             local_grad_q_ref = (
-                loongtrain.dispatch(
+                dsulysess_func.dispatch(
                     fa_dq,
                     rank,
                     world_size,
@@ -546,7 +422,7 @@ class TestTeUlysessAttn(DistTestBase):
                 .clone()
             )
             local_grad_k_ref = (
-                loongtrain.dispatch(
+                dsulysess_func.dispatch(
                     fa_dk,
                     rank,
                     world_size,
@@ -560,7 +436,7 @@ class TestTeUlysessAttn(DistTestBase):
                 .clone()
             )
             local_grad_v_ref = (
-                loongtrain.dispatch(
+                dsulysess_func.dispatch(
                     fa_dv,
                     rank,
                     world_size,
@@ -588,11 +464,11 @@ class TestTeUlysessAttn(DistTestBase):
 
     @skip_if_lt_x_gpu(4)
     @with_comms
-    def test_loongtrain_attn(self):
+    def test_dsulysess_attn(self):
         device = torch.cuda.current_device()
         # device = torch.device(f"cuda:{self.rank}")
 
-        attn_config = LoongTrainAttnConfig(
+        attn_config = DsUlysessAttnConfig(
             total_seqlen=4096,
             num_heads=16,
             head_dim=128,
@@ -607,18 +483,18 @@ class TestTeUlysessAttn(DistTestBase):
             device=device,
             dtype=torch.int32,
         )
-        causal = False
+        causal = True
         test_bwd = True
 
-        local_attn_arg = LoongTrainAttnArg(
+        local_attn_arg = DsUlysessAttnArg(
             seqlens=seqlens,
             is_causal=causal,
         )
 
-        self.mytest_loongtrain_dispatch(
+        self.mytest_dsulysess_dispatch(
             attn_config, local_attn_arg, self.rank, device, test_bwd
         )
-        self.mytest_loongtrain_impl(
+        self.mytest_dsulysess_impl(
             attn_config, local_attn_arg, self.rank, device, test_bwd
         )
 

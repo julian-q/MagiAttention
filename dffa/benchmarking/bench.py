@@ -5,10 +5,16 @@ from copy import deepcopy
 from functools import partial
 from typing import Any, Dict, List
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import seaborn as sns
 import torch
+from matplotlib import patheffects as pe
 from py3nvml import py3nvml
 from tqdm import tqdm
+
+from .image_grid import make_img_grid
 
 # -------------------       bench utils     ------------------- #
 
@@ -253,6 +259,7 @@ class Benchmark:
         self.line_names = line_names
         self.y_log = y_log
         self.styles = styles
+
         # plot info
         self.xlabel = xlabel
         self.ylabel = ylabel
@@ -320,10 +327,6 @@ class Mark(object):
     ):
         # run the benchmark functions
         dfs, x_names = self._call(bench, **kwargs)
-        import matplotlib.pyplot as plt
-        import numpy as np
-        import seaborn as sns
-        from matplotlib import patheffects as pe
 
         plt.style.use("seaborn-v0_8")
         sns.set_theme(
@@ -343,121 +346,118 @@ class Mark(object):
             "viridis", n_colors=len(bench.line_names)
         )  # 改用专业渐变色[7,8](@ref)
 
+        if not bench.plot_name:
+            return
+
         for k in dfs:
-            if bench.plot_name:
-                plt.figure(figsize=(14, 8), dpi=150)
-                ax = plt.gca()
+            plt.figure(figsize=(14, 8), dpi=150)
+            ax = plt.gca()
 
-                all_data = []
-                labels = bench.line_names
+            all_data = []
+            labels = bench.line_names
+            xvars = bench.x_vals
+            x_indices = np.arange(len(xvars))
+            bar_width = 0.25
 
-                for provider in bench.line_names:
-                    data = dfs[k][provider].dropna().values
-                    all_data.append(data)
+            for provider in bench.line_names:
+                data = dfs[k][provider].dropna().values
+                all_data.append(data)
 
-                    bar_width = 0.25
-                    x_indices = np.arange(len(all_data[0]))
-
-                    for i, (data, label) in enumerate(zip(all_data, labels)):
-                        edge_color = COLOR_PALETTE[i] + (0.7,)
-                        ax.bar(
-                            x_indices + i * bar_width,
-                            data,
-                            width=bar_width,
-                            label=label,
-                            color=COLOR_PALETTE[i],
-                            edgecolor=edge_color,
-                            linewidth=1.5,
-                            alpha=0.85,
-                            zorder=2,
-                        )
-
-                    for i, (data, label) in enumerate(zip(all_data, labels)):
-                        ax.plot(
-                            x_indices + i * bar_width,
-                            data,
-                            color=COLOR_PALETTE[i],
-                            marker="D",
-                            markersize=8,
-                            markerfacecolor="white",
-                            markeredgewidth=1.5,
-                            linestyle="-",
-                            linewidth=2.5,
-                            path_effects=[
-                                pe.Stroke(linewidth=4, foreground="white"),
-                                pe.Normal(),
-                            ],
-                            zorder=3,
-                        )
-
-                    y_min, y_max = np.min(all_data) * 0.9, np.max(all_data) * 1.15
-                    ax.set_ylim(y_min, y_max)
-
-                    # for i, data in enumerate(all_data):
-                    #     for j, value in enumerate(data):
-                    #         ax.text(
-                    #             x_indices[j] + i*bar_width,
-                    #             value + (y_max - y_min)*0.02,
-                    #             f'{value:.1f}',
-                    #             ha='center',
-                    #             va='bottom',
-                    #             color=COLOR_PALETTE[i],
-                    #             fontsize=9,
-                    #             fontweight='bold'
-                    #         )
-
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
-                ax.spines["left"].set_linewidth(1.5)
-                ax.grid(axis="y", alpha=0.3, linestyle=":", linewidth=1.2)
-
-                ax.set_xlabel(
-                    bench.xlabel or x_names[0],
-                    fontsize=12,
-                    labelpad=12,
-                    fontweight="semibold",
-                )
-                ax.set_ylabel(
-                    bench.ylabel[k] if isinstance(bench.ylabel, dict) else bench.ylabel,
-                    fontsize=12,
-                    labelpad=12,
-                    fontweight="semibold",
+            for i, (data, label) in enumerate(zip(all_data, labels)):
+                edge_color = COLOR_PALETTE[i] + (0.7,)
+                ax.bar(
+                    x_indices + i * bar_width,
+                    data,
+                    width=bar_width,
+                    label=label,
+                    color=COLOR_PALETTE[i],
+                    edgecolor=edge_color,
+                    linewidth=1.5,
+                    alpha=0.65,
+                    zorder=2,
                 )
 
-                ax.set_title(
-                    f"Distribution of {k}\n{bench.plot_name}",
-                    fontsize=15,
-                    pad=18,
-                    fontweight="bold",
-                    color="#2d3436",
+            for i, (data, label) in enumerate(zip(all_data, labels)):
+                ax.plot(
+                    x_indices + i * bar_width,
+                    data,
+                    color=COLOR_PALETTE[i],
+                    # label=label, # ignore the plot label
+                    marker="D",
+                    markersize=8,
+                    markerfacecolor="white",
+                    markeredgewidth=1.5,
+                    linestyle="-",
+                    linewidth=2.5,
+                    path_effects=[
+                        pe.Stroke(linewidth=4, foreground="white"),
+                        pe.Normal(),
+                    ],
+                    zorder=3,
                 )
 
-                legend = ax.legend(
-                    frameon=True,
-                    shadow=True,
-                    fontsize=10,
-                    borderpad=1,
-                    title="Providers",
-                    title_fontsize="12",
-                    loc="upper left",
-                    bbox_to_anchor=(1, 1),
-                )
-                legend.get_frame().set_facecolor("#FFFFFFDD")
-                legend.get_frame().set_edgecolor("#dfe6e9")
-                legend.get_frame().set_linewidth(1.5)
+            y_min, y_max = np.min(all_data) * 0.9, np.max(all_data) * 1.15
+            ax.set_ylim(y_min, y_max)
 
-                plt.tight_layout()
-                if save_path:
-                    plt.savefig(
-                        os.path.join(save_path, f"{k}_report.png"),
-                        dpi=300,
-                        bbox_inches="tight",
-                        transparent=False,
-                        facecolor="white",
-                    )
-                if show_plots:
-                    plt.show()
-                plt.close()
+            ax.legend()
+
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_linewidth(1.5)
+            ax.grid(axis="y", alpha=0.3, linestyle=":", linewidth=1.2)
+
+            # set the xticks t the center of each group with right xticklabels
+            ax.set_xticks(x_indices + bar_width * (len(all_data) - 1) / 2)
+            ax.set_xticklabels(xvars)
+
+            # set xlabel and ylabel
+            ax.set_xlabel(
+                bench.xlabel or x_names[0],
+                fontsize=12,
+                labelpad=12,
+                fontweight="semibold",
+            )
+            ax.set_ylabel(
+                bench.ylabel[k] if isinstance(bench.ylabel, dict) else bench.ylabel,
+                fontsize=12,
+                labelpad=12,
+                fontweight="semibold",
+            )
+
+            ax.set_title(
+                f"The benchmark of {k}\n{bench.plot_name}",
+                fontsize=15,
+                pad=18,
+                fontweight="bold",
+                color="#2d3436",
+            )
+
+            legend = ax.legend(
+                frameon=True,
+                shadow=True,
+                fontsize=10,
+                borderpad=1,
+                title=bench.line_arg,
+                title_fontsize="12",
+                loc="upper left",
+                bbox_to_anchor=(1, 1),
+            )
+            legend.get_frame().set_facecolor("#FFFFFFDD")
+            legend.get_frame().set_edgecolor("#dfe6e9")
+            legend.get_frame().set_linewidth(1.5)
+
+            plt.tight_layout()
+            if save_path:
+                plt.savefig(
+                    os.path.join(save_path, f"{k}_report.png"),
+                    dpi=300,
+                    bbox_inches="tight",
+                    transparent=False,
+                    facecolor="white",
+                )
+            if show_plots:
+                plt.show()
+            plt.close()
 
         return dfs
 
@@ -467,6 +467,7 @@ class Mark(object):
         print_data=False,
         save_path="",
         return_df=False,
+        report_all_name="perf_report_all",
         **kwargs,
     ):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
@@ -476,7 +477,7 @@ class Mark(object):
         if save_path:
             # Create directory if it doesn't exist
             os.makedirs(save_path, exist_ok=True)
-            html = open(os.path.join(save_path, "perf_report.html"), "w")
+            html = open(os.path.join(save_path, f"{report_all_name}.html"), "w")
             html.write("<html><body>\n")
 
         pbar = tqdm(benchmarks, total=len(benchmarks))
@@ -497,6 +498,12 @@ class Mark(object):
         if save_path:
             html.write("</body></html>\n")
             html.close()
+
+            make_img_grid(
+                img_dir=save_path,
+                save_path=os.path.join(save_path, f"{report_all_name}.png"),
+                ignore_patterns=[report_all_name],
+            )
 
         if return_df:
             if has_single_bench:

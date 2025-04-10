@@ -1,5 +1,6 @@
 import math
 import os
+import re
 import sys
 from typing import Any, List, Optional, Tuple, Union
 
@@ -364,12 +365,15 @@ class ToPILImage:
         return format_string
 
 
-def make_img_grid(img_dir, save_path=None, layout="wide"):
+def make_img_grid(
+    img_dir, save_path=None, layout="wide", ignore_patterns: list[str] = []
+):
     image_files = [
         Image.open(os.path.join(r, f))
         for r, d, files in os.walk(img_dir)
         for f in files
         if (f.endswith(".png") or f.endswith(".jpg"))
+        and not any(re.match(p, f) for p in ignore_patterns)
         and not (os.path.abspath(os.path.join(r, f)) == os.path.abspath(save_path))
     ]
     num_plots = len(image_files)

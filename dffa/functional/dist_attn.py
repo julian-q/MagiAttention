@@ -311,13 +311,15 @@ class DistFlashAttnRuntime:
                     f"attn-fwd: area={attn_arg.total_area} | "
                     f"qr={attn_arg.q_ranges} | kr={attn_arg.k_ranges}"
                 ):
-                    out, _, _, _, _, lse = _flex_flash_attn_forward(
+                    out, lse, *rest = _flex_flash_attn_forward(
                         q=q,
                         k=k,
                         v=v,
                         **attn_arg.to_ffa_args(),
                         softmax_scale=q.shape[-1] ** -0.5,
                         deterministic=deterministic,
+                        softcap=0.0,
+                        sm_margin=0,
                     )
 
                 # fill output with zero indexed by "hole" q ranges
@@ -364,29 +366,22 @@ class DistFlashAttnRuntime:
                     lse=lse,
                     attn_arg=attn_arg,
                 )
-                partial_dkv = torch.cat([partial_dk, partial_dv], dim=0)
             else:
-                # FIXME: here q needs to use 'zeros_like' to initialize
-                # since ffa only zero those covered by q_ranges
-                # needed to be fixed by ffa kernel in the future
-                partial_dq = torch.zeros_like(q)
-                partial_dkv = torch.empty_like(kv)
-                partial_dk, partial_dv = self.chunk_kv(partial_dkv)
-
-                partial_dq, partial_dk, partial_dv, _ = _flex_flash_attn_backward(
+                # TODO: pre-allocate the dkdv buffer to avoid dkv concat
+                partial_dq, partial_dk, partial_dv, *rest = _flex_flash_attn_backward(
                     dout=do,
                     q=q,
                     k=k,
                     v=v,
                     out=o,
                     softmax_lse=lse,
-                    dq=partial_dq,
-                    dk=partial_dk,
-                    dv=partial_dv,
                     **attn_arg.to_ffa_args(),
                     softmax_scale=q.shape[-1] ** -0.5,
                     deterministic=deterministic,
+                    softcap=0.0,
+                    sm_margin=0,
                 )
+            partial_dkv = torch.cat([partial_dk, partial_dv], dim=0)
 
         return partial_dq, partial_dkv, attn_arg.skip_attn
 

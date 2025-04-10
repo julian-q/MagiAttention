@@ -14,7 +14,7 @@ from dffa.common.ranges import AttnRanges
 from dffa.testing.dist_common import DistTestBase, with_comms
 
 # isort: split
-from exps.attn.baselines.ring_attn import TERingAttnWithKVP2P
+from exps.dist_attn.baselines.ring_attn import TERingAttnWithKVP2P
 
 
 class TestTERingAttnWithKVP2P(DistTestBase):
