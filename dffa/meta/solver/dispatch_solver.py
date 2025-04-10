@@ -776,7 +776,8 @@ class DispatchSolver(nn.Module):
         bucket_num_limit = n // num_buckets
 
         # sort jobs in descending order
-        sorted_indices = argsort(workloads, key=lambda x: -x)
+        # in order to unify test cases, it is not directly sorted in descending order.
+        sorted_indices = argsort(workloads)[::-1]
         workloads = [workloads[i] for i in sorted_indices]
 
         # init the job partition and its workloads
