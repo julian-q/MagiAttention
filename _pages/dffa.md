@@ -1,10 +1,9 @@
 ---
 layout: distill
-title: a dffa blog demo
 permalink: /
-title: dffa
-description: an example of a distill-style blog post and main elements
-date: 2025-04-02
+title: MagiAttention
+description: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training
+date: 2025-04-21
 featured: true
 pretty_table: true
 tabs: true
@@ -21,18 +20,16 @@ tikzjax: true
 typograms: true
 
 authors:
-  - name: Albert Einstein
-    url: "https://en.wikipedia.org/wiki/Albert_Einstein"
+  - name: Zewei Tao
+    url: "https://github.com/littsk"
+    email: zeweitao@sand.ai
     affiliations:
-      name: IAS, Princeton
-  - name: Boris Podolsky
-    url: "https://en.wikipedia.org/wiki/Boris_Podolsky"
+      name: SandAI
+  - name: Yunpeng Huang
+    url: "https://github.com/Strivin0311"
+    email: yunpenghuang@sand.ai
     affiliations:
-      name: IAS, Princeton
-  - name: Nathan Rosen
-    url: "https://en.wikipedia.org/wiki/Nathan_Rosen"
-    affiliations:
-      name: IAS, Princeton
+      name: SandAI
 
 bibliography: 2025-04-02-dffa.bib
 
