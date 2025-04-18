@@ -5,7 +5,6 @@ import torch
 import torch.distributed
 import torch.distributed as dist
 import torch.nn.functional as F
-from flash_attn_interface import _flex_flash_attn_backward, _flex_flash_attn_forward
 
 import dffa
 from dffa.comm.primitive import group_cast_collective, group_reduce_collective
@@ -14,6 +13,7 @@ from dffa.common.ranges import NaiveRanges
 from dffa.meta.collection import AttnCalcMeta, CommMeta
 from dffa.utils import nvtx, to_higher_fp_dtype
 
+from .flex_flash_attn import _flex_flash_attn_backward, _flex_flash_attn_forward
 from .sdpa import sdpa_bwd, sdpa_fwd
 from .utils import safe_subtract
 

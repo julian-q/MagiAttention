@@ -1,4 +1,8 @@
-
+# Exclude all third-party libraries and patches files globally
+exclude: |
+    (?x)^(
+        dffa/csrc/.+|
+    )$
 repos:
 # Common hooks
 -   repo: https://github.com/pre-commit/pre-commit-hooks
