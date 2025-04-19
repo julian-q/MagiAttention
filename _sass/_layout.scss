@@ -2,7 +2,7 @@
  * Content
  ******************************************************************************/
 
-body {
+ body {
   padding-bottom: 70px;
   color: var(--global-text-color);
   background-color: var(--global-bg-color);
@@ -66,13 +66,19 @@ body.sticky-bottom-footer {
   ul {
     list-style: none; // 移除默认的列表样式
     padding: 0; // 移除内边距
-    margin: 0; // 移除外边距
+    margin: 0 0 0 30px; // 添加外边距
   }
 
   li {
-    margin: 10px 0; // 列表项之间的间距
+    margin: 10px 0px 10px 0px; // 列表项之间的间距
     font-weight: bold; // 加粗字体
-    text-align: center; // 文本居中
+    text-align: left; // 文本左对齐
+  }
+  li sub{
+    margin: 10px 0px 10px 10px; // 列表项之间的间距
+    font-weight: bold; // 加粗字体
+    text-align: left; // 文本左对齐
+    font-size: 0.8em;
   }
 
   h3 {

@@ -35,7 +35,7 @@ authors:
     affiliations:
       name: SandAI, Nanjing University
 
-bibliography: 2025-04-02-dffa.bib
+bibliography: magiattn.bib
 
 # Optionally, you can add a table of contents to your post.
 # NOTES:
@@ -44,13 +44,16 @@ bibliography: 2025-04-02-dffa.bib
 #   - we may want to automate TOC generation in the future using
 #     jekyll-toc plugin (https://github.com/toshimaru/jekyll-toc).
 toc:
+  - name: Overview
   - name: Abstract
-    subsections:
-      - name: Subsection 1
-      - name: Subsection 2
   - name: Introduction
   - name: Related Work
-  - name: Method
+  - name: Methodology
+    subsections:
+      - name: Flex-Flash-Attn
+      - name: Comp Load-Balance
+      - name: Zero-Redundant Comm
+      - name: Multi-Stage Overlap
   - name: Experiment
   - name: Discussion
   - name: Future Work
@@ -77,25 +80,51 @@ _styles: >
   }
 ---
 
+## Overview
+
+<!-- <div class="l-body"> -->
+<div class="l-middle">
+<!-- <div class="l-page"> -->
+  <div class="row mt-3">
+      <div class="col-sm mt-3 mt-md-0">
+          {% include figure.liquid loading="eager" path="assets/img/magiattn/magiattn_overview.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+      </div>
+  </div>
+  <div class="caption">
+    Overview of MagiAttention: (1) FFA, an efficient kernel based on Flash-Attention 3, supports flexible mask patterns; (2) The dispatch solver shards and dispatches packed data with ultra-long contexts and heterogeneous masks, ensuring load-balanced computation; (3) Group-Cast and Group-Reduce primitives eliminate redundant communication; (4) The overlap solver adaptively partitions communication for optimal overlap; (5) During runtime, MagiAttention propagates with flexible and efficient kernels, zero-redundant communication, and multi-stage overlap scheduling, achieving linear scalability.
+  </div>
+</div>
+
 ## Abstract
 
-Abstract Abstract Abstract Abstract Abstract Abstract Abstract Abstract Abstract Abstract
+Training large-scale models for video generation presents two major challenges: (1) The extremely long context length of video tokens, which reaching up to 4 million during training, results in prohibitive computational and memory overhead. (2) The combination of block-causal attention and Packing-and-Padding (PnP) introduces highly complex attention mask patterns. 
 
-### Subsection 1
-
-
-### Subsection 2
+To address these challenges, we propose [MagiAttention](https://github.com/SandAI-org/MagiAttention), which aims to support a wide variety of attention mask types with **kernel-level flexibility**, while achieving **linear scalability** with respect to context-parallel (CP) size across a broad range of scenarios, particularly suitable for training tasks involving <u><em>ultra-long, heterogeneous data</em></u> training like video-generation for [Magi-1](https://github.com/SandAI-org/Magi-1).
 
 
 ## Introduction
 
-Introduction Introduction Introduction Introduction Introduction Introduction Introduction Introduction
+Training large-scale autoregressive diffusion models like \magi for video generation presents two major challenges: 
+
+- The extremely long context length of video tokens, which reaching up to 4 million during training, results in prohibitive computational and memory overhead. Context-Parallelism (CP) is designed for dealing such long context challenge, but existing state-of-the-art CP methods<d-cite key="jacobs2023deepspeed"></d-cite><d-cite key="liu2023ringattentionblockwisetransformers"></d-cite><d-cite key="fang2024uspunifiedsequenceparallelism"></d-cite><d-cite key="gu2024loongtrainefficienttraininglongsequence"></d-cite><d-cite key="chen2024longvilascalinglongcontextvisual"></d-cite> face scalability limitations that face scalability limitations due to size constraints or the high communication overhead inherent in inefficient ring-style point-to-point (P2P) patterns. While recent efforts<d-cite key="wang2024datacentricheterogeneityadaptivesequenceparallelism"></d-cite><d-cite key="zhang2024dcp"></d-cite><d-cite key="ge2025bytescaleefficientscalingllm"></d-cite> dynamically adjust CP sizes to avoid unnecessary sharding and redundant communication for shorter sequences, they still incur extra memory overhead for NCCL buffers and involve complex scheduling to balance loads and synchronize across different subsets of ranks.
+
+- The combination of block-causal attention and Packing-and-Padding (PnP) introduces highly complex attention mask patterns with variable sequence lengths, which cannot be efficiently handled by existing attention implementations.
+
+
 
 ## Related Work
 
 Related WorkRelated WorkRelated WorkRelated WorkRelated WorkRelated WorkRelated WorkRelated Work
 
-## Method
+## Methodologies
+
+### Flex-Flash-Attn
+
+### Comp Load-Balance
+
+### Zero-Redundant Comm
+
+### Multi-Stage Overlap
 
 $$
 E=mc^2
