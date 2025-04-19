@@ -84,26 +84,27 @@ class GroupCollectiveArg:
         }
 
         (
-            self.group_reduce_args_dict_kv_packed["a2a_input_size_ranges_with_rank"],
             self.group_reduce_args_dict_kv_packed["a2a_input_split_size"],
+            self.group_reduce_args_dict_kv_packed["perm_before_a2a_kwargs"],
         ) = _calc_group_reduce_a2a_input_meta_args(
             input_split_size_list=self.group_reduce_args_dict_kv_packed[
                 "input_split_size_list"
             ],
             dst_index_list=self.group_reduce_args_dict_kv_packed["dst_index_list"],
             world_size=self.world_size,
+            device="cuda",
         )
 
         (
             self.group_reduce_args_dict_kv_packed["a2a_output_split_size"],
-            self.group_reduce_args_dict_kv_packed["a2a_output_reduce_ranges_list"],
-            self.group_reduce_args_dict_kv_packed["output_size_ranges"],
+            self.group_reduce_args_dict_kv_packed["range_reduce_kwargs"],
         ) = _calc_group_reduce_a2a_output_meta_args(
             output_split_size_list=self.group_reduce_args_dict_kv_packed[
                 "output_split_size_list"
             ],
             src_indices_list=self.group_reduce_args_dict_kv_packed["src_indices_list"],
             world_size=self.world_size,
+            device="cuda",
         )
 
     def to_group_cast_args(self) -> dict:

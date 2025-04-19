@@ -1,0 +1,177 @@
+import unittest
+from unittest import TestCase
+
+import torch
+
+from dffa.common.range_op import range_gather
+
+
+def range_gather_ref(
+    input: torch.Tensor,
+    ranges: torch.Tensor,
+    cu_range_sizes: torch.Tensor,
+    total_size: int,
+    dim: int = 0,
+):
+    output_shape = list(input.shape)
+    output_shape[dim] = total_size
+    output = torch.empty(output_shape, device=input.device, dtype=input.dtype)
+
+    # Return directly if empty tensor
+    if ranges.shape[0] == 0 or input.numel() == 0:
+        return output
+
+    # Handle the case when dim is not 0
+    if dim != 0:
+        input = input.transpose(0, dim).contiguous()
+        output = output.transpose(0, dim).contiguous()
+    else:
+        input = input.contiguous()
+        output = output.contiguous()
+
+    # Iterate through each range, copy input data to output
+    for i, (start, end) in enumerate(ranges):
+        out_start = cu_range_sizes[i].item()
+        range_size = end.item() - start.item()
+        output[out_start : out_start + range_size] = input[start:end]
+
+    # If transposed earlier, transpose back
+    if dim != 0:
+        output = output.transpose(0, dim)
+
+    return output
+
+
+class TestRangeGather(TestCase):
+    def test_range_gather(self):
+        """Test range_gather function by comparing with reference implementation"""
+
+        # Helper function to compare two implementations
+        def compare_implementations(
+            input_tensor, ranges, cu_range_sizes, total_size, dim=0
+        ):
+            # Call the original implementation
+            result = range_gather(
+                input=input_tensor,
+                ranges=ranges,
+                cu_range_sizes=cu_range_sizes,
+                total_size=total_size,
+                dim=dim,
+            )
+
+            # Call the reference implementation
+            expected = range_gather_ref(
+                input=input_tensor,
+                ranges=ranges,
+                cu_range_sizes=cu_range_sizes,
+                total_size=total_size,
+                dim=dim,
+            )
+
+            # Verify results match
+            assert torch.equal(result, expected)
+            return result, expected
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Test case 1: Basic functionality
+        input_tensor = torch.randn(10, 5, device=device)
+        ranges = torch.tensor([[0, 3], [5, 8]], dtype=torch.int32, device=device)
+        cu_range_sizes = torch.tensor([0, 3], dtype=torch.int32, device=device)
+        total_size = 6
+
+        compare_implementations(input_tensor, ranges, cu_range_sizes, total_size)
+
+        # Test case 2: Empty tensor handling
+        empty_input = torch.empty(0, 5, device=device)
+        empty_ranges = torch.empty(0, 2, dtype=torch.int32, device=device)
+        empty_cu_sizes = torch.empty(0, dtype=torch.int32, device=device)
+
+        compare_implementations(empty_input, empty_ranges, empty_cu_sizes, 0, 0)
+
+        # Test case 3: Different dimensions (dim=1)
+        input_tensor = torch.randn(5, 10, 3, device=device)
+        ranges = torch.tensor([[0, 3], [5, 8]], dtype=torch.int32, device=device)
+        cu_range_sizes = torch.tensor([0, 3], dtype=torch.int32, device=device)
+        total_size = 6
+
+        compare_implementations(input_tensor, ranges, cu_range_sizes, total_size, dim=1)
+
+        # Test case 4: Large tensors
+        large_input = torch.randn(100, 20, device=device)
+        large_ranges = torch.tensor(
+            [[0, 30], [40, 80]], dtype=torch.int32, device=device
+        )
+        large_cu_sizes = torch.tensor([0, 30], dtype=torch.int32, device=device)
+        large_total_size = 70
+
+        compare_implementations(
+            large_input, large_ranges, large_cu_sizes, large_total_size
+        )
+
+        # Test case 5: Edge case - single range
+        single_range_input = torch.randn(10, 5, device=device)
+        single_range = torch.tensor([[3, 7]], dtype=torch.int32, device=device)
+        single_cu_size = torch.tensor([0], dtype=torch.int32, device=device)
+
+        compare_implementations(single_range_input, single_range, single_cu_size, 4)
+
+        # Test case 6: Multi-dimensional tensors
+        multi_dim_input = torch.randn(10, 5, 8, 4, device=device)
+
+        compare_implementations(
+            multi_dim_input, ranges, cu_range_sizes, total_size, dim=0
+        )
+        compare_implementations(
+            multi_dim_input, ranges, cu_range_sizes, total_size, dim=2
+        )
+
+        # Test case 7: Non-contiguous memory layout
+        non_contiguous_input = torch.randn(10, 5, device=device).transpose(0, 1)
+        assert not non_contiguous_input.is_contiguous()
+
+        compare_implementations(
+            non_contiguous_input,
+            ranges,
+            cu_range_sizes,
+            total_size,
+            dim=1,
+        )
+
+        # Test case 8: Various data types
+        for dtype in [torch.float16, torch.float32, torch.int32, torch.int64]:
+            typed_input = torch.randn(10, 5, device=device).to(dtype)
+            if dtype.is_floating_point:
+                compare_implementations(typed_input, ranges, cu_range_sizes, total_size)
+
+        # Test case 9: Random data large-scale testing
+        for _ in range(5):
+            # Randomly generate input
+            input_size = torch.randint(20, 50, (1,)).item()
+            feature_size = torch.randint(5, 15, (1,)).item()
+            input_tensor = torch.randn(input_size, feature_size, device=device)
+
+            # Randomly generate ranges
+            num_ranges = torch.randint(1, 10, (1,)).item()
+            ranges_list = []
+            sizes_list = [0]
+
+            for _ in range(num_ranges):
+                start = torch.randint(0, input_size - 5, (1,)).item()
+                end = torch.randint(
+                    start + 1, min(start + 10, input_size) + 1, (1,)
+                ).item()
+                ranges_list.append([start, end])
+                sizes_list.append(sizes_list[-1] + (end - start))
+
+            ranges = torch.tensor(ranges_list, dtype=torch.int32, device=device)
+            cu_range_sizes = torch.tensor(
+                sizes_list[:-1], dtype=torch.int32, device=device
+            )
+            total_size = sizes_list[-1]
+
+            compare_implementations(input_tensor, ranges, cu_range_sizes, total_size)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -13,7 +13,6 @@ from dffa.comm.primitive.utils import (
     _calc_group_reduce_a2a_input_args,
     _reduce_to_tensor,
     _unpermute_tensor,
-    range_gather,
 )
 from dffa.testing.dist_common import DistTestBase, with_comms
 
@@ -355,42 +354,6 @@ def _calc_group_reduce_a2a_output_phase2_meta_args_ref(
     )
 
 
-def range_gather_ref(
-    input: torch.Tensor,
-    ranges: torch.Tensor,
-    cu_range_sizes: torch.Tensor,
-    output_size: int,
-    dim: int = 0,
-):
-    output_shape = list(input.shape)
-    output_shape[dim] = output_size
-    output = torch.empty(output_shape, device=input.device, dtype=input.dtype)
-
-    # Return directly if empty tensor
-    if ranges.shape[0] == 0 or input.numel() == 0:
-        return output
-
-    # Handle the case when dim is not 0
-    if dim != 0:
-        input = input.transpose(0, dim).contiguous()
-        output = output.transpose(0, dim).contiguous()
-    else:
-        input = input.contiguous()
-        output = output.contiguous()
-
-    # Iterate through each range, copy input data to output
-    for i, (start, end) in enumerate(ranges):
-        out_start = cu_range_sizes[i].item()
-        range_size = end.item() - start.item()
-        output[out_start : out_start + range_size] = input[start:end]
-
-    # If transposed earlier, transpose back
-    if dim != 0:
-        output = output.transpose(0, dim)
-
-    return output
-
-
 class TestMultiCastCollective(DistTestBase):
     @property
     def process_group(self):
@@ -556,140 +519,6 @@ class TestMultiCastCollective(DistTestBase):
 
         self.assertTrue(torch.equal(output_tensor, expected_tensor))
 
-    def test_range_gather(self):
-        """Test range_gather function by comparing with reference implementation"""
-
-        # Helper function to compare two implementations
-        def compare_implementations(
-            input_tensor, ranges, cu_range_sizes, output_size, dim=0
-        ):
-            # Call the original implementation
-            result = range_gather(
-                input=input_tensor,
-                ranges=ranges,
-                cu_range_sizes=cu_range_sizes,
-                output_size=output_size,
-                dim=dim,
-            )
-
-            # Call the reference implementation
-            expected = range_gather_ref(
-                input=input_tensor,
-                ranges=ranges,
-                cu_range_sizes=cu_range_sizes,
-                output_size=output_size,
-                dim=dim,
-            )
-
-            # Verify results match
-            assert torch.equal(result, expected)
-            return result, expected
-
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Test case 1: Basic functionality
-        input_tensor = torch.randn(10, 5, device=device)
-        ranges = torch.tensor([[0, 3], [5, 8]], dtype=torch.int32, device=device)
-        cu_range_sizes = torch.tensor([0, 3], dtype=torch.int32, device=device)
-        output_size = 6
-
-        compare_implementations(input_tensor, ranges, cu_range_sizes, output_size)
-
-        # Test case 2: Empty tensor handling
-        empty_input = torch.empty(0, 5, device=device)
-        empty_ranges = torch.empty(0, 2, dtype=torch.int32, device=device)
-        empty_cu_sizes = torch.empty(0, dtype=torch.int32, device=device)
-
-        compare_implementations(empty_input, ranges, cu_range_sizes, output_size)
-        compare_implementations(input_tensor, empty_ranges, empty_cu_sizes, 0, 0)
-
-        # Test case 3: Different dimensions (dim=1)
-        input_tensor = torch.randn(5, 10, 3, device=device)
-        ranges = torch.tensor([[0, 3], [5, 8]], dtype=torch.int32, device=device)
-        cu_range_sizes = torch.tensor([0, 3], dtype=torch.int32, device=device)
-        output_size = 6
-
-        compare_implementations(
-            input_tensor, ranges, cu_range_sizes, output_size, dim=1
-        )
-
-        # Test case 4: Large tensors
-        large_input = torch.randn(100, 20, device=device)
-        large_ranges = torch.tensor(
-            [[0, 30], [40, 80]], dtype=torch.int32, device=device
-        )
-        large_cu_sizes = torch.tensor([0, 30], dtype=torch.int32, device=device)
-        large_output_size = 70
-
-        compare_implementations(
-            large_input, large_ranges, large_cu_sizes, large_output_size
-        )
-
-        # Test case 5: Edge case - single range
-        single_range_input = torch.randn(10, 5, device=device)
-        single_range = torch.tensor([[3, 7]], dtype=torch.int32, device=device)
-        single_cu_size = torch.tensor([0], dtype=torch.int32, device=device)
-
-        compare_implementations(single_range_input, single_range, single_cu_size, 4)
-
-        # Test case 6: Multi-dimensional tensors
-        multi_dim_input = torch.randn(10, 5, 8, 4, device=device)
-
-        compare_implementations(
-            multi_dim_input, ranges, cu_range_sizes, output_size, dim=0
-        )
-        compare_implementations(
-            multi_dim_input, ranges, cu_range_sizes, output_size, dim=2
-        )
-
-        # Test case 7: Non-contiguous memory layout
-        non_contiguous_input = torch.randn(10, 5, device=device).transpose(0, 1)
-        assert not non_contiguous_input.is_contiguous()
-
-        compare_implementations(
-            non_contiguous_input,
-            ranges,
-            cu_range_sizes,
-            output_size,
-            dim=1,
-        )
-
-        # Test case 8: Various data types
-        for dtype in [torch.float16, torch.float32, torch.int32, torch.int64]:
-            typed_input = torch.randn(10, 5, device=device).to(dtype)
-            if dtype.is_floating_point:
-                compare_implementations(
-                    typed_input, ranges, cu_range_sizes, output_size
-                )
-
-        # Test case 9: Random data large-scale testing
-        for _ in range(5):
-            # Randomly generate input
-            input_size = torch.randint(20, 50, (1,)).item()
-            feature_size = torch.randint(5, 15, (1,)).item()
-            input_tensor = torch.randn(input_size, feature_size, device=device)
-
-            # Randomly generate ranges
-            num_ranges = torch.randint(1, 10, (1,)).item()
-            ranges_list = []
-            sizes_list = [0]
-
-            for _ in range(num_ranges):
-                start = torch.randint(0, input_size - 5, (1,)).item()
-                end = torch.randint(
-                    start + 1, min(start + 10, input_size) + 1, (1,)
-                ).item()
-                ranges_list.append([start, end])
-                sizes_list.append(sizes_list[-1] + (end - start))
-
-            ranges = torch.tensor(ranges_list, dtype=torch.int32, device=device)
-            cu_range_sizes = torch.tensor(
-                sizes_list[:-1], dtype=torch.int32, device=device
-            )
-            output_size = sizes_list[-1]
-
-            compare_implementations(input_tensor, ranges, cu_range_sizes, output_size)
-
     def test_unpermute_tensor(self):
         # ---------    normal unperm idxs     --------- #
 
@@ -712,7 +541,7 @@ class TestMultiCastCollective(DistTestBase):
                 "cu_range_sizes": torch.tensor(
                     [0, 2, 5, 6], dtype=torch.int32, device=torch.cuda.current_device()
                 ),
-                "output_size": 6,
+                "total_size": 6,
                 "dim": 0,
             },
         )
@@ -749,7 +578,7 @@ class TestMultiCastCollective(DistTestBase):
                 "cu_range_sizes": torch.tensor(
                     [0, 1, 4, 6], dtype=torch.int32, device=torch.cuda.current_device()
                 ),
-                "output_size": 6,
+                "total_size": 6,
                 "dim": 0,
             },
         )
@@ -785,7 +614,7 @@ class TestMultiCastCollective(DistTestBase):
                 "cu_range_sizes": torch.tensor(
                     [0, 2, 5, 6], dtype=torch.int32, device=torch.cuda.current_device()
                 ),
-                "output_size": 6,
+                "total_size": 6,
                 "dim": 0,
             },
         )
@@ -824,7 +653,7 @@ class TestMultiCastCollective(DistTestBase):
                 "cu_range_sizes": torch.tensor(
                     [], dtype=torch.int32, device=torch.cuda.current_device()
                 ),
-                "output_size": 0,
+                "total_size": 0,
                 "dim": 0,
             },
         )
@@ -876,11 +705,36 @@ class TestMultiCastCollective(DistTestBase):
             num_src_list=num_src_list,
         )
 
+        # calc range_reduce kwargs
+        input_ranges = []
+        output_ranges = []
+        cu_range_sizes = [0]
+        total_size = 0
+        for (out_start, out_end), reduce_ranges in zip(
+            output_size_ranges, a2a_output_reduce_ranges_list
+        ):
+            for reduce_start, reduce_end in reduce_ranges:
+                input_ranges.append([reduce_start, reduce_end])
+                output_ranges.append([out_start, out_end])
+                cu_range_sizes.append(reduce_end - reduce_start)
+                total_size += reduce_end - reduce_start
+
+        input_ranges = torch.tensor(input_ranges, dtype=torch.int32)
+        output_ranges = torch.tensor(output_ranges, dtype=torch.int32)
+        cu_range_sizes = torch.tensor(cu_range_sizes, dtype=torch.int32)
+        cu_range_sizes = torch.cumsum(cu_range_sizes, dim=0)
+
+        range_reduce_kwargs = {
+            "input_ranges": input_ranges.to(torch.cuda.current_device()),
+            "output_ranges": output_ranges.to(torch.cuda.current_device()),
+            "cu_range_sizes": cu_range_sizes.to(torch.cuda.current_device()),
+            "total_size": total_size,
+        }
+
         reduced_output = _reduce_to_tensor(
             output=output_ref,
             a2a_output=a2a_output,
-            a2a_output_reduce_ranges_list=a2a_output_reduce_ranges_list,
-            output_size_ranges=output_size_ranges,
+            range_reduce_kwargs=range_reduce_kwargs,
         )
 
         # ---------    check     --------- #

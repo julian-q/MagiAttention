@@ -6,10 +6,9 @@ from typing import Callable, TypeAlias
 
 import torch
 import torch.distributed as dist
-import triton
-import triton.language as tl
 
 from dffa.common.range import NaiveRange
+from dffa.common.range_op import range_gather, range_reduce
 from dffa.common.ranges import NaiveRanges
 from dffa.utils import nvtx
 
@@ -27,114 +26,6 @@ __all__ = [
 ]
 
 
-@triton.jit
-def range_gather_kernel(
-    input_ptr,
-    output_ptr,
-    ranges_ptr,
-    cu_range_sizes_ptr,
-    n_ranges,
-    input_stride,
-    output_stride,
-    N,
-    M_BLOCK_SIZE: tl.constexpr,
-    N_BLOCK_SIZE: tl.constexpr,
-):
-    # Current thread processes this range index
-    range_idx = tl.program_id(0)
-
-    # Exit if range_idx is out of bounds
-    if range_idx < n_ranges:
-        # Get the start and end positions of the current range
-        inp_start = tl.load(ranges_ptr + range_idx * 2)
-        inp_end = tl.load(ranges_ptr + range_idx * 2 + 1)
-        range_size = inp_end - inp_start
-
-        # Get the output positions
-        out_start = tl.load(cu_range_sizes_ptr + range_idx)
-
-        curr_m_block_index = tl.program_id(1)
-        n_rows_per_block = tl.cdiv(range_size, M_BLOCK_SIZE)
-        for i in tl.range(n_rows_per_block):
-            curr_row = curr_m_block_index * n_rows_per_block + i
-            if curr_row < range_size:
-                inp_idx = (inp_start + curr_row) * input_stride
-                out_idx = (out_start + curr_row) * output_stride
-                curr_inp_ptr = input_ptr + inp_idx
-                curr_out_ptr = output_ptr + out_idx
-                cols = tl.arange(0, N_BLOCK_SIZE)
-                inp = tl.load(curr_inp_ptr + cols, mask=cols < N)
-                tl.store(curr_out_ptr + cols, inp, mask=cols < N)
-
-
-def range_gather(
-    input: torch.Tensor,
-    ranges: torch.Tensor,
-    cu_range_sizes: torch.Tensor,
-    output_size: int,
-    dim: int = 0,
-):
-    output_shape = list(input.shape)
-    output_shape[dim] = output_size
-    output = torch.empty(output_shape, device=input.device, dtype=input.dtype)
-
-    # Get the number of ranges
-    n_ranges = ranges.shape[0]
-
-    # Return directly if empty tensor
-    if n_ranges == 0 or input.numel() == 0:
-        return output
-
-    # Handle the case when dim is not 0
-    if dim != 0:
-        input = input.transpose(0, dim).contiguous()
-        output = output.transpose(0, dim).contiguous()
-    else:
-        input = input.contiguous()
-        output = output.contiguous()
-
-    ranges = ranges.contiguous()
-    cu_range_sizes = cu_range_sizes.contiguous()
-
-    # Calculate stride (considering memory step size of elements)
-    input_stride = input.stride(0)
-    output_stride = output.stride(0)
-
-    N = input.numel() // input.shape[0]
-
-    # Less than 64KB per feature: enqueue fused kernel
-    MAX_FUSED_SIZE = 65536 // input.element_size()
-    N_BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
-    if N > N_BLOCK_SIZE:
-        raise RuntimeError("This range gather doesn't support feature dim >= 64KB.")
-
-    # Determine the number of elements processed by each block
-    M_BLOCK_SIZE = 16
-
-    # Calculate grid size
-    grid = (n_ranges, M_BLOCK_SIZE)
-
-    # Launch kernel
-    range_gather_kernel[grid](
-        input,
-        output,
-        ranges,
-        cu_range_sizes,
-        n_ranges,
-        input_stride,
-        output_stride,
-        N,
-        M_BLOCK_SIZE,
-        N_BLOCK_SIZE,
-    )
-
-    # If transposed earlier, transpose back
-    if dim != 0:
-        output = output.transpose(0, dim)
-
-    return output
-
-
 def _seqlens2curanges(
     seqlens: list[int],
 ) -> NaiveRanges:
@@ -142,6 +33,42 @@ def _seqlens2curanges(
 
 
 RangesWithRank: TypeAlias = list[tuple[NaiveRange, int]]
+
+
+def _calc_range_gather_kwargs_from_ranges_with_rank(
+    a2a_input_size_ranges_with_rank: RangesWithRank,
+    device: torch.device,
+) -> dict:
+    # get range_gather's ranges from a2a_input_size_ranges_with_rank
+    ranges = [(start, end) for (start, end), _ in a2a_input_size_ranges_with_rank]
+
+    # calculate range sizes
+    range_sizes = [end - start for start, end in ranges]
+
+    # calculate the output size
+    total_size = sum(range_sizes)
+
+    # calculate cu_range_sizes
+    cu_range_sizes = torch.cumsum(
+        torch.tensor(
+            [0] + range_sizes,
+            dtype=torch.int32,
+        ),
+        dim=0,
+    )
+
+    # convert to tensor
+    ranges = torch.tensor(
+        ranges,
+    )
+
+    perm_range_gather_kwargs = {
+        "ranges": ranges.to(device),
+        "cu_range_sizes": cu_range_sizes.to(device),
+        "total_size": total_size,
+    }
+
+    return perm_range_gather_kwargs
 
 
 # ------------------        utils for group cast collective       ------------------ #
@@ -190,35 +117,10 @@ def _calc_group_cast_a2a_input_meta_args(
         a2a_input_split_size_dict[rank] for rank in range(world_size)
     ]
 
-    # ---------    calc perm before a2a kwargs     --------- #
-    # get range_gather's ranges from a2a_input_size_ranges_with_rank
-    ranges = [(start, end) for (start, end), _ in a2a_input_size_ranges_with_rank]
-
-    # calculate range sizes
-    range_sizes = [end - start for start, end in ranges]
-
-    # calculate the output size
-    output_size = sum(range_sizes)
-
-    # calculate cu_range_sizes
-    cu_range_sizes = torch.cumsum(
-        torch.tensor(
-            [0] + range_sizes,
-            dtype=torch.int32,
-        ),
-        dim=0,
+    perm_range_gather_kwargs = _calc_range_gather_kwargs_from_ranges_with_rank(
+        a2a_input_size_ranges_with_rank=a2a_input_size_ranges_with_rank,
+        device=device,
     )
-
-    # convert to tensor
-    ranges = torch.tensor(
-        ranges,
-    )
-
-    perm_range_gather_kwargs = {
-        "ranges": ranges.to(device),
-        "cu_range_sizes": cu_range_sizes.to(device),
-        "output_size": output_size,
-    }
 
     return (
         a2a_input_split_size,
@@ -285,7 +187,7 @@ def _calc_group_cast_a2a_output_meta_args(
 
     # ---------    calc unperm before a2a kwargs     --------- #
     # calculate the output size from a2a_output_split_size_list
-    output_size = sum(a2a_output_tensor_size_list)
+    total_size = sum(a2a_output_tensor_size_list)
 
     # calculate each range's start and end
     ranges = torch.tensor(
@@ -321,7 +223,7 @@ def _calc_group_cast_a2a_output_meta_args(
     unperm_range_gather_kwargs = {
         "ranges": ranges.to(device),
         "cu_range_sizes": cu_range_sizes.to(device),
-        "output_size": output_size,
+        "total_size": total_size,
     }
 
     return (
@@ -439,19 +341,17 @@ def _calc_group_cast_a2a_args(
 def _reduce_to_tensor(
     output: torch.Tensor,
     a2a_output: torch.Tensor,
-    a2a_output_reduce_ranges_list: list[NaiveRanges],
-    output_size_ranges: NaiveRanges,
+    range_reduce_kwargs: dict,
 ) -> torch.Tensor:
     """sum-reduce a2a output to output
     as a post-processing func for group_reduce_collective
     """
 
-    for (out_start, out_end), reduce_ranges in zip(
-        output_size_ranges, a2a_output_reduce_ranges_list
-    ):
-        out_slice = output[out_start:out_end]
-        for reduce_start, reduce_end in reduce_ranges:
-            out_slice.add_(a2a_output[reduce_start:reduce_end])
+    output = range_reduce(
+        input=a2a_output,
+        output=output,
+        **range_reduce_kwargs,
+    )
 
     return output
 
@@ -461,7 +361,8 @@ def _calc_group_reduce_a2a_input_meta_args(
     input_split_size_list: list[int],
     dst_index_list: list[int],
     world_size: int,
-) -> tuple[RangesWithRank, list[int]]:
+    device: torch.device,
+) -> tuple[list[int], dict]:
     input_size_ranges = _seqlens2curanges(input_split_size_list)
     a2a_input_size_ranges_with_rank: RangesWithRank = sorted(
         [(input_size_ranges[i], dst_rank) for i, dst_rank in enumerate(dst_index_list)],
@@ -475,7 +376,12 @@ def _calc_group_reduce_a2a_input_meta_args(
         a2a_input_split_size_dict[rank] for rank in range(world_size)
     ]
 
-    return a2a_input_size_ranges_with_rank, a2a_input_split_size
+    perm_range_gather_kwargs = _calc_range_gather_kwargs_from_ranges_with_rank(
+        a2a_input_size_ranges_with_rank=a2a_input_size_ranges_with_rank,
+        device=device,
+    )
+
+    return a2a_input_split_size, perm_range_gather_kwargs
 
 
 def _calc_group_reduce_a2a_input_args(
@@ -488,41 +394,24 @@ def _calc_group_reduce_a2a_input_args(
     # -----     group_reduce_a2a_input meta args     ----- #
 
     # check if pre-calculated
-    a2a_input_size_ranges_with_rank = kwargs.get(
-        "a2a_input_size_ranges_with_rank", None
-    )
     a2a_input_split_size = kwargs.get("a2a_input_split_size", None)
+    perm_before_a2a_kwargs = kwargs.get("perm_before_a2a_kwargs", None)
 
-    if a2a_input_size_ranges_with_rank is None or a2a_input_split_size is None:
+    if perm_before_a2a_kwargs is None or a2a_input_split_size is None:
         (
-            a2a_input_size_ranges_with_rank,
             a2a_input_split_size,
+            perm_before_a2a_kwargs,
         ) = _calc_group_reduce_a2a_input_meta_args(
             input_split_size_list=input_split_size_list,
             dst_index_list=dst_index_list,
             world_size=world_size,
+            device=input.device,
         )
 
-    # -----     group_reduce_a2a_input tensor args     ----- #
-
-    a2a_input = torch.empty(
-        [sum(a2a_input_split_size), *input.shape[1:]],
-        dtype=input.dtype,
-        device=input.device,
+    a2a_input = range_gather(
+        input=input,
+        **perm_before_a2a_kwargs,
     )
-
-    # NOTE: a2a_input.numel() == 0 is a corner case when
-    # dst_index_list is empty like []
-    # then a2a_input_split_size is all-zero like [0, 0, 0, 0]
-    if a2a_input.numel() > 0:
-        a2a_input = torch.cat(
-            [
-                input[start:end]
-                for ((start, end), rank) in a2a_input_size_ranges_with_rank
-            ],
-            dim=0,
-            out=a2a_input,
-        )
 
     return a2a_input, a2a_input_split_size
 
@@ -532,7 +421,8 @@ def _calc_group_reduce_a2a_output_meta_args(
     output_split_size_list: list[int],
     src_indices_list: list[list[int]],
     world_size: int,
-) -> tuple[list[int], list[NaiveRanges], NaiveRanges]:
+    device: torch.device,
+) -> tuple[list[int], dict]:
     # phase1 meta
     a2a_output_split_size = [0 for _ in range(world_size)]
     size_src_index_i_list = []
@@ -564,10 +454,35 @@ def _calc_group_reduce_a2a_output_meta_args(
             ]
         )
 
+    # calc range_reduce kwargs
+    input_ranges = []
+    output_ranges = []
+    cu_range_sizes = [0]
+    total_size = 0
+    for (out_start, out_end), reduce_ranges in zip(
+        output_size_ranges, a2a_output_reduce_ranges_list
+    ):
+        for reduce_start, reduce_end in reduce_ranges:
+            input_ranges.append([reduce_start, reduce_end])
+            output_ranges.append([out_start, out_end])
+            cu_range_sizes.append(reduce_end - reduce_start)
+            total_size += reduce_end - reduce_start
+
+    input_ranges = torch.tensor(input_ranges, dtype=torch.int32)
+    output_ranges = torch.tensor(output_ranges, dtype=torch.int32)
+    cu_range_sizes = torch.tensor(cu_range_sizes, dtype=torch.int32)
+    cu_range_sizes = torch.cumsum(cu_range_sizes, dim=0)
+
+    range_reduce_kwargs = {
+        "input_ranges": input_ranges.to(device),
+        "output_ranges": output_ranges.to(device),
+        "cu_range_sizes": cu_range_sizes.to(device),
+        "total_size": total_size,
+    }
+
     return (
         a2a_output_split_size,
-        a2a_output_reduce_ranges_list,
-        output_size_ranges,
+        range_reduce_kwargs,
     )
 
 
@@ -577,27 +492,22 @@ def _calc_group_reduce_a2a_output_args(
     src_indices_list: list[list[int]],
     world_size: int,
     **kwargs,
-) -> tuple[torch.Tensor, list[int], list[NaiveRanges], NaiveRanges]:
+) -> tuple[torch.Tensor, list[int], dict]:
     # -----     group_reduce_a2a_output meta args     ----- #
 
     # check if pre-calculated
     a2a_output_split_size = kwargs.get("a2a_output_split_size", None)
-    a2a_output_reduce_ranges_list = kwargs.get("a2a_output_reduce_ranges_list", None)
-    output_size_ranges = kwargs.get("output_size_ranges", None)
+    range_reduce_kwargs = kwargs.get("range_reduce_kwargs", None)
 
-    if (
-        a2a_output_split_size is None
-        or a2a_output_reduce_ranges_list is None
-        or output_size_ranges is None
-    ):
+    if a2a_output_split_size is None or range_reduce_kwargs is None:
         (
             a2a_output_split_size,
-            a2a_output_reduce_ranges_list,
-            output_size_ranges,
+            range_reduce_kwargs,
         ) = _calc_group_reduce_a2a_output_meta_args(
             output_split_size_list=output_split_size_list,
             src_indices_list=src_indices_list,
             world_size=world_size,
+            device=output.device,
         )
 
     # -----     group_reduce_a2a_output tensor args     ----- #
@@ -611,8 +521,7 @@ def _calc_group_reduce_a2a_output_args(
     return (
         a2a_output,
         a2a_output_split_size,
-        a2a_output_reduce_ranges_list,
-        output_size_ranges,
+        range_reduce_kwargs,
     )
 
 
@@ -649,8 +558,7 @@ def _calc_group_reduce_a2a_args(
     (
         a2a_output,
         a2a_output_split_size,
-        a2a_output_reduce_ranges_list,
-        output_size_ranges,
+        range_reduce_kwargs,
     ) = _calc_group_reduce_a2a_output_args(
         output=output,
         output_split_size_list=output_split_size_list,
@@ -664,8 +572,7 @@ def _calc_group_reduce_a2a_args(
     post_process_fn = partial(
         _reduce_to_tensor,
         a2a_output=a2a_output,
-        a2a_output_reduce_ranges_list=a2a_output_reduce_ranges_list,
-        output_size_ranges=output_size_ranges,
+        range_reduce_kwargs=range_reduce_kwargs,
     )
 
     # DE-BUG
