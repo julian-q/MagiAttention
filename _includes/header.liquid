@@ -55,6 +55,19 @@
               {% endif %}
             </a>
           </li>
+          {% if page.permalink == '/' %}
+            <li class="nav-item">
+              <a class="nav-link" href={{ page.external-links.github }} title="Code">
+                <i class="fa-brands fa-github"></i>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href={{ page.external-links.arxiv }} title="Paper">
+                <i class="fa-solid fa-file-pdf"></i>
+              </a>
+            </li>
+          {% endif %}
+          
 
           <!-- Other pages -->
           {% assign sorted_pages = site.pages | sort: 'nav_order' %}

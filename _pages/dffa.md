@@ -19,6 +19,10 @@ chart:
 tikzjax: true
 typograms: true
 
+external-links:
+  github: https://github.com/world-sim-dev/MagiAttention
+  arxiv: https://arxiv.org/abs/2205.14135
+
 authors:
   - name: Zewei Tao
     url: "https://github.com/littsk"
@@ -29,7 +33,7 @@ authors:
     url: "https://github.com/Strivin0311"
     email: yunpenghuang@sand.ai
     affiliations:
-      name: SandAI
+      name: SandAI, Nanjing University
 
 bibliography: 2025-04-02-dffa.bib
 
@@ -41,15 +45,16 @@ bibliography: 2025-04-02-dffa.bib
 #     jekyll-toc plugin (https://github.com/toshimaru/jekyll-toc).
 toc:
   - name: Abstract
-    # if a section has subsections, you can add them as follows:
-    # subsections:
-    #   - name: Example Child Subsection 1
-    #   - name: Example Child Subsection 2
+    subsections:
+      - name: Subsection 1
+      - name: Subsection 2
   - name: Introduction
   - name: Related Work
   - name: Method
   - name: Experiment
   - name: Discussion
+  - name: Future Work
+  - name: FAQ
   - name: Reference
   - name: Appendix
 
@@ -74,33 +79,15 @@ _styles: >
 
 ## Abstract
 
-<div class="row mt-3">
-    <div class="col-sm mt-3 mt-md-0">
-        {% include figure.liquid loading="eager" path="assets/img/9.jpg" class="img-fluid rounded z-depth-1" zoomable=true %}
-    </div>
-    <div class="col-sm mt-3 mt-md-0">
-        {% include figure.liquid loading="eager" path="assets/img/7.jpg" class="img-fluid rounded z-depth-1" %}
-    </div>
-</div>
-<div class="caption">
-    A simple, elegant caption looks good between image rows, after each row, or doesn't have to be there at all.
-</div>
-
 Abstract Abstract Abstract Abstract Abstract Abstract Abstract Abstract Abstract Abstract
 
-## Introduction
+### Subsection 1
 
-<div class="row mt-3">
-    <div class="col-sm mt-3 mt-md-0">
-        {% include video.liquid path="assets/video/pexels-engin-akyurt-6069112-960x540-30fps.mp4" class="img-fluid rounded z-depth-1" controls=true autoplay=true %}
-    </div>
-    <div class="col-sm mt-3 mt-md-0">
-        {% include video.liquid path="https://www.youtube.com/embed/jNQXAC9IVRw" class="img-fluid rounded z-depth-1" controls=true %}
-    </div>
-</div>
-<div class="caption">
-    A simple, elegant caption looks good between video rows, after each row, or doesn't have to be there at all.
-</div>
+
+### Subsection 2
+
+
+## Introduction
 
 Introduction Introduction Introduction Introduction Introduction Introduction Introduction Introduction
 
