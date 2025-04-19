@@ -1,4 +1,4 @@
 User-agent: *
 Disallow:
 
-Sitemap: https://littsk.github.io/zeus/sitemap.xml
+Sitemap: https://SandAI-org.github.io/MagiAttention/sitemap.xml
