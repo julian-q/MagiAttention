@@ -20,8 +20,8 @@ tikzjax: true
 typograms: true
 
 external-links:
-  github: https://github.com/world-sim-dev/MagiAttention
-  arxiv: https://arxiv.org/abs/2205.14135
+  github: https://github.com/SandAI-org/MagiAttention
+  arxiv: https://arxiv.org/abs/2505.14135
 
 authors:
   - name: Zewei Tao
