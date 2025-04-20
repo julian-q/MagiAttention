@@ -61,6 +61,8 @@ toc:
   - name: Discussion
   - name: Future Work
   - name: FAQ
+  - name: Acknowledgement
+  - name: Citation
 
 # Below is an example of injecting additional post-specific styles.
 # If you use this post as a template, delete this _styles block.
@@ -374,3 +376,37 @@ The results are presented in the following figures.
 
 
 ## FAQ
+
+
+## Acknowledgement
+
+We are grateful to the contributors listed below for their valuable contributions during the early stages of MagiAttention.
+
+| Member   | Affiliations         | Email                        | GitHub Account    |
+|:-----------|:-------------|:----------------------------|:---------------|
+| Zewei Tao    | SandAI       | zeweitao@sand.ai            | littsk         |
+| Yunpeng Huang    | SandAI, Nanjing University       | hyp@smail.nju.edu.cn, yunpenghuang@sand.ai        | Strivin0311    |
+| Qiangang Wang    | Nanjing University | 522024330081@smail.nju.edu.cn | WT1W           |
+| Hanwen Sun   | Beijing University |  |    |
+| Tao Bu      | Nanjing University | 502024330002@smail.nju.edu.cn | Big-TRex       |
+| WenYang Fang    | Nanjing University | fwy@smail.nju.edu.cn        | kagami4243     |
+| Siyuang Yan    | Nanjing University | siyuanyan@smail.nju.edu.cn  | FibonaccciYan  |
+| Zixu Jiang     | Nanjing University | 522023330040@smail.nju.edu.cn | 191220042      |
+| Dingkun Xu    | Nanjing University | 211220090@smail.nju.edu.cn  | PureDimension  |
+| Mingyu Liang    | Nanjing University |                   | gaomusiki      |
+| Jingwei Xu    | Nanjing University | jingweix@nju.edu.cn | paragonlight   |
+
+
+## Citation
+
+If you use MagiAttention in your research, please cite:
+
+```bibtex
+@misc{magiattention2025,
+  title={MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training},
+  author={Zewei, Tao and Yunpeng, Huang},
+  year={2025},
+  howpublished={\url{https://github.com/SandAI-org/MagiAttention/}},
+}
+```
+
