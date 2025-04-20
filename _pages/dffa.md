@@ -387,13 +387,13 @@ We are grateful to the contributors listed below for their valuable contribution
 | Zewei Tao    | SandAI       | zeweitao@sand.ai            | littsk         |
 | Yunpeng Huang    | SandAI, Nanjing University       | yunpenghuang@sand.ai,hyp@smail.nju.edu.cn       | Strivin0311    |
 | Qiangang Wang    | Nanjing University | 522024330081@smail.nju.edu.cn | WT1W           |
-| Hanwen Sun   | Beijing University |  |    |
+| Hanwen Sun   | SandAI, Beijing University |  shw20010329@163.com |  hanwen-sun  |
 | Tao Bu      | Nanjing University | 502024330002@smail.nju.edu.cn | Big-TRex       |
 | WenYang Fang    | Nanjing University | fwy@smail.nju.edu.cn        | kagami4243     |
 | Siyuang Yan    | Nanjing University | siyuanyan@smail.nju.edu.cn  | FibonaccciYan  |
 | Zixu Jiang     | Nanjing University | 522023330040@smail.nju.edu.cn | 191220042      |
 | Dingkun Xu    | Nanjing University | 211220090@smail.nju.edu.cn  | PureDimension  |
-| Mingyu Liang    | Nanjing University |                   | gaomusiki      |
+| Mingyu Liang    | Nanjing University |   mingyuliang518@gmail.com     | gaomusiki      |
 | Jingwei Xu    | Nanjing University | jingweix@nju.edu.cn | paragonlight   |
 
 
