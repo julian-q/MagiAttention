@@ -1,4 +1,5 @@
 import itertools
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
@@ -16,6 +17,39 @@ from dffa.meta.collection import DispatchMeta
 from dffa.meta.collection.calc_meta import AttnArg
 from dffa.meta.solver.dist_attn_solver import DistAttnSolver
 from dffa.utils import is_list_value_all, wrap_to_list
+
+
+@dataclass(frozen=True)
+class DistAttnRuntimeKey:
+    cp_group: dist.ProcessGroup
+    pad_size: int
+    head_dim: int
+    q_ranges: AttnRanges
+    k_ranges: AttnRanges
+    attn_mask_type: AttnMaskType | list[AttnMaskType]
+    total_seqlen_q: int
+    total_seqlen_k: int
+    dist_attn_config: DistAttnConfig
+
+    def __hash__(self):
+        if isinstance(self.attn_mask_type, list):
+            mask_tuple = tuple(self.attn_mask_type)
+        else:
+            mask_tuple = (self.attn_mask_type,)
+
+        return hash(
+            (
+                self.cp_group,
+                self.pad_size,
+                self.head_dim,
+                self.q_ranges,
+                self.k_ranges,
+                mask_tuple,
+                self.total_seqlen_q,
+                self.total_seqlen_k,
+                self.dist_attn_config,
+            )
+        )
 
 
 class DistAttnRuntimeMgr:
