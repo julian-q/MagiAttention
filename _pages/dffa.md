@@ -332,8 +332,7 @@ Results are reported in the following figures.
 
 ### Module-Level
 
-
-To validate the linear scalability of MagiAttention, we assess the computing power (in $\texttt{TFLOPs/s}$) of the attention module propagation as the sequence length and parallel size increases for both forward and backward passes across various mask patterns, and compare it with several state-of-the-art CP strategies.
+To validate the scalability of MagiAttention, we assess the computing power (in $\texttt{TFLOPs/s}$) of the attention module propagation as the sequence length and parallel size increases for both forward and backward passes across various mask patterns, and compare it with several state-of-the-art CP strategies.
 
 The experiments are conducted on a large-scale productive GPU cluster<d-footnote>Due to business and confidentiality reasons, specific details about the productive cluster, such as the number and type of GPUs, are withheld.</d-footnote>. We scale the total sequence length $\textit{seqlen}$, the context-parallel size $\textit{cp_size}$, and the node size $\textit{nnodes}$ together from $(\textit{seqlen}:64k, \textit{cp_size}:1, nnodes:1)$, $(\textit{seqlen}:128k, \textit{cp_size}:2, nnodes:2)$, ..., to $(\textit{seqlen}:3840k (\sim 4M), \textit{cp_size}:60, nnodes:60)$. 
 
@@ -347,22 +346,28 @@ The results are presented in the following figures.
 <div class="l-middle">
   <div class="row mt-3">
       <div class="col-sm mt-3 mt-md-0">
-          {% include figure.liquid loading="eager" path="assets/img/magiattn/ffa_perf_report_full_all_family.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+          {% include figure.liquid loading="eager" path="assets/img/magiattn/scale/full_mask_fwd_per_gpu/flops_report.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+      </div>
+      <div class="col-sm mt-3 mt-md-0">
+          {% include figure.liquid loading="eager" path="assets/img/magiattn/scale/full_mask_bwd_per_gpu/flops_report.png" class="img-fluid rounded z-depth-1" zoomable=true %}
       </div>
   </div>
   <div class="caption">
-    Benchmarking FFA's performance and flexibility against other leading attention kernels for full mask scenarios.
+    Benchmarking MaiAttention's scalability against other leading CP strategies for full mask scenarios.
   </div>
 </div>
 
 <div class="l-middle">
   <div class="row mt-3">
       <div class="col-sm mt-3 mt-md-0">
-          {% include figure.liquid loading="eager" path="assets/img/magiattn/ffa_perf_report_causal_all_family.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+          {% include figure.liquid loading="eager" path="assets/img/magiattn/scale/varlen_full_mask_fwd_per_gpu/flops_report.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+      </div>
+      <div class="col-sm mt-3 mt-md-0">
+          {% include figure.liquid loading="eager" path="assets/img/magiattn/scale/varlen_full_mask_bwd_per_gpu/flops_report.png" class="img-fluid rounded z-depth-1" zoomable=true %}
       </div>
   </div>
   <div class="caption">
-    Benchmarking FFA's performance and flexibility against other leading attention kernels for causal mask scenarios.
+    Benchmarking MaiAttention's scalability against other leading CP strategies for varlen full mask scenarios.
   </div>
 </div>
 
