@@ -369,14 +369,15 @@ The results are presented in the following figures.
 
 ## Discussion
 
-
+comming soon ...
 
 ## Future Work
 
-
+comming soon ...
 
 ## FAQ
 
+comming soon ...
 
 ## Acknowledgement
 
