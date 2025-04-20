@@ -45,7 +45,6 @@ bibliography: magiattn.bib
 #     jekyll-toc plugin (https://github.com/toshimaru/jekyll-toc).
 toc:
   - name: Overview
-  - name: Abstract
   - name: Introduction
   - name: Related Work
   - name: Methodology
