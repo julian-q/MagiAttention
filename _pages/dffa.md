@@ -385,7 +385,7 @@ We are grateful to the contributors listed below for their valuable contribution
 | Member   | Affiliations         | Email                        | GitHub Account    |
 |:-----------|:-------------|:----------------------------|:---------------|
 | Zewei Tao    | SandAI       | zeweitao@sand.ai            | littsk         |
-| Yunpeng Huang    | SandAI, Nanjing University       | hyp@smail.nju.edu.cn, yunpenghuang@sand.ai        | Strivin0311    |
+| Yunpeng Huang    | SandAI, Nanjing University       | yunpenghuang@sand.ai,hyp@smail.nju.edu.cn       | Strivin0311    |
 | Qiangang Wang    | Nanjing University | 522024330081@smail.nju.edu.cn | WT1W           |
 | Hanwen Sun   | Beijing University |  |    |
 | Tao Bu      | Nanjing University | 502024330002@smail.nju.edu.cn | Big-TRex       |
