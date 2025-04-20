@@ -399,6 +399,19 @@ def make_img_grid(
     plt.axis("off")
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path)
+        if ".png" in save_path:
+            plt.savefig(
+                save_path.replace(".png", ".pdf"),
+                dpi=300,
+            )
+        elif ".jpg" in save_path:
+            plt.savefig(
+                save_path.replace(".jpg", ".pdf"),
+                dpi=300,
+            )
+        plt.savefig(
+            save_path,
+            dpi=300,
+        )
     else:
         plt.show()

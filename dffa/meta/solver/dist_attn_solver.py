@@ -321,7 +321,7 @@ class HostAttnSliceMaker:
         ]
 
     def _make_slice_for_causal_mask(self) -> list[AttnSlice]:
-        """For casual mask, there're more than one cases to be considered"""
+        """For causal mask, there're more than one cases to be considered"""
 
         match self.causal_case_key:
             case self.CausalCaseKey.RECTANGLE:

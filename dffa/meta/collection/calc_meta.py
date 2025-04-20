@@ -119,6 +119,13 @@ class AttnArg:
         is_causal_mapping_tensor_fwd = torch.tensor(
             self.is_causal_mapping, dtype=torch.bool, device=torch.cuda.current_device()
         )
+        # XXX HACK: for latest ffa interface
+        mask_type_tensor_fwd = torch.zeros_like(
+            is_causal_mapping_tensor_fwd,
+            dtype=torch.int32,
+            device=torch.cuda.current_device(),
+        )
+        mask_type_tensor_fwd[is_causal_mapping_tensor_fwd] = 1
 
         # sanity check
         if dffa.is_sanity_check_enable():
@@ -141,7 +148,9 @@ class AttnArg:
         self.ffa_fwd_args_dict = dict(
             q_ranges=q_ranges_tensor_fwd,
             k_ranges=k_ranges_tensor_fwd,
-            is_causal_mapping=is_causal_mapping_tensor_fwd,
+            # XXX HACK: for latest ffa interface
+            # is_causal_mapping=is_causal_mapping_tensor_fwd,
+            attn_type_map=mask_type_tensor_fwd,
             max_seqlen_q=max_seqlen_q_fwd,
             max_seqlen_k=max_seqlen_k_fwd,
         )
@@ -173,6 +182,13 @@ class AttnArg:
                 dtype=torch.bool,
                 device=torch.cuda.current_device(),
             )
+            # XXX HACK: for latest ffa interface
+            mask_type_tensor_bwd = torch.zeros_like(
+                is_causal_mapping_tensor_bwd,
+                dtype=torch.int32,
+                device=torch.cuda.current_device(),
+            )
+            mask_type_tensor_bwd[is_causal_mapping_tensor_bwd] = 1
 
             # sanity check
             if dffa.is_sanity_check_enable():
@@ -195,7 +211,9 @@ class AttnArg:
             self.ffa_bwd_args_dict = dict(
                 q_ranges=q_ranges_tensor_bwd,
                 k_ranges=k_ranges_tensor_bwd,
-                is_causal_mapping=is_causal_mapping_tensor_bwd,
+                # XXX HACK: for latest ffa interface
+                # is_causal_mapping=is_causal_mapping_tensor_bwd,
+                attn_type_map=mask_type_tensor_bwd,
                 max_seqlen_q=max_seqlen_q_bwd,
                 max_seqlen_k=max_seqlen_k_bwd,
             )

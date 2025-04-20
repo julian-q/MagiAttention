@@ -2,7 +2,6 @@ from logging import getLogger
 from typing import Optional
 
 import torch
-import torch.distributed
 import torch.distributed as dist
 import torch.nn.functional as F
 

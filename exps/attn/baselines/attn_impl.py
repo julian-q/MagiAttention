@@ -1,14 +1,18 @@
 import math
-from collections import namedtuple
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from flash_attn import flash_attn_func as fa2_func
-
-# from flash_attn_interface import flash_attn_func as fa3_func # TODO: support fa3 interface
-from flash_attn_interface import flex_flash_attn_func as ffa_func
+from flash_attn import flash_attn_varlen_func as fa2_varlen_func
+from flash_attn_interface import flash_attn_func as fa3_func
+from flash_attn_interface import flash_attn_varlen_func as fa3_varlen_func
+from flex_flash_attn_interface import flex_flash_attn_func as ffa_func
 from packaging import version
+from torch.nn.attention.flex_attention import flex_attention
 from torch.nn.functional import scaled_dot_product_attention as sdpa_func
+from transformer_engine.pytorch.attention import FusedAttnFunc
+from transformer_engine.pytorch.constants import TE_DType
+from transformer_engine.pytorch.cpp_extensions.fused_attn import FusedAttnBackend
 
 if version.parse(torch.__version__) > version.parse("2.4"):
     # NOTE: in benchmarking, we should explicitly allow bf16/fp16 reduction for sdpa
@@ -16,6 +20,15 @@ if version.parse(torch.__version__) > version.parse("2.4"):
     # due to the new feature since torch2.5:
     # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-reduction-for-fp16-and-bf16-in-scaled-dot-product-attention-sdpa
     torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
+
+
+# solve the error:
+# RuntimeError: This backward function was compiled with non-empty donated buffers
+# which requires create_graph=False and retain_graph=False.
+# Please keep backward(create_graph=False, retain_graph=False) across all backward() function calls,
+# or set torch._functorch.config.donated_buffer=False to disable donated buffer.
+torch._functorch.config.donated_buffer = False
+flex_attn_func = torch.compile(flex_attention)
 
 
 def torch_attn_func(
@@ -75,20 +88,76 @@ def torch_attn_func(
     return attn_out
 
 
-attn_impls = namedtuple(
-    "AttnImpls",
-    field_names=[
-        "fa2_func",
-        # "fa3_func", # TODO: support fa3 interface
-        "ffa_func",
-        "sdpa_func",
-        "torch_attn_func",
-    ],
-    defaults=[
-        fa2_func,
-        # fa3_func, # TODO: support fa3 interface
-        ffa_func,
-        sdpa_func,
-        torch_attn_func,
-    ],
-)()
+def cudnn_fused_attn_func(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_kv: torch.Tensor,
+    max_seqlen_q: int,
+    max_seqlen_kv: int,
+    dropout_p: Optional[float] = 0.0,
+    is_causal: Optional[bool] = False,
+    softmax_scale: Optional[float] = None,
+    window_size: Optional[tuple[int, int]] = None,
+    is_training: bool = False,
+    deterministic: bool = False,
+) -> torch.Tensor:
+    # prepare args
+    attn_mask_type = "padding_causal" if is_causal else "padding"
+    qkv_layout = "thd_thd_thd"
+    qkv_dtype = TE_DType[q.dtype]
+    core_attention_bias_type = "no_bias"
+    core_attention_bias = None
+    fast_zero_fill = True
+    softmax_scale = softmax_scale if softmax_scale is not None else q.shape[-1] ** -0.5
+    fused_attention_backend = FusedAttnBackend["F16_arbitrary_seqlen"]
+    use_FAv2_bwd = False
+    fp8 = False
+    fp8_meta: dict[str, Any] = {}
+    quantizers = None
+    window_size = window_size if window_size is not None else (-1, -1)
+
+    output = FusedAttnFunc.apply(
+        is_training,
+        max_seqlen_q,
+        max_seqlen_kv,
+        cu_seqlens_q,
+        cu_seqlens_kv,
+        cu_seqlens_q,
+        cu_seqlens_kv,
+        q,
+        k,
+        v,
+        qkv_dtype,
+        core_attention_bias,
+        softmax_scale,
+        dropout_p if is_training else 0.0,
+        fast_zero_fill,
+        qkv_layout,
+        core_attention_bias_type,
+        attn_mask_type,
+        window_size,
+        None,  # rng_gen
+        fused_attention_backend,
+        use_FAv2_bwd,
+        fp8,
+        fp8_meta,
+        quantizers,
+        deterministic,
+    )
+
+    return output
+
+
+__all__ = [
+    "torch_attn_func",
+    "fa2_func",
+    "fa3_func",
+    "ffa_func",
+    "sdpa_func",
+    "cudnn_fused_attn_func",
+    "flex_attn_func",
+    "fa2_varlen_func",
+    "fa3_varlen_func",
+]

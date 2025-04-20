@@ -23,7 +23,7 @@ from transformer_engine.pytorch.cpp_extensions.fused_attn import (
 )
 
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
-# full casual
+# full causal
 from dffa.common.enum import AttnMaskType
 from dffa.common.ranges import AttnRanges
 

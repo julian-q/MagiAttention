@@ -350,19 +350,20 @@ class Mark(object):
             return
 
         for k in dfs:
-            plt.figure(figsize=(14, 8), dpi=150)
+            plt.figure(figsize=(14, 8), dpi=300)
             ax = plt.gca()
 
             all_data = []
             labels = bench.line_names
             xvars = bench.x_vals
             x_indices = np.arange(len(xvars))
-            bar_width = 0.25
+            bar_width = 0.25 if len(labels) < 4 else 0.15
 
             for provider in bench.line_names:
                 data = dfs[k][provider].dropna().values
                 all_data.append(data)
 
+            # 画柱状图
             for i, (data, label) in enumerate(zip(all_data, labels)):
                 edge_color = COLOR_PALETTE[i] + (0.7,)
                 ax.bar(
@@ -377,10 +378,45 @@ class Mark(object):
                     zorder=2,
                 )
 
+                # Annotate bars where value is -1 or -2
+                for idx, value in enumerate(data):
+                    if value == -1:
+                        ax.text(
+                            x_indices[idx] + i * bar_width,
+                            value + 0.2,  # Position text slightly above the bar
+                            # "OOM",
+                            "E",
+                            ha="center",
+                            va="bottom",
+                            fontsize=15,
+                            fontweight="bold",  # Add this line to make the text bold
+                            color=COLOR_PALETTE[i],
+                            zorder=4,
+                        )
+                    elif value == -2:
+                        ax.text(
+                            x_indices[idx] + i * bar_width,
+                            value + 0.2,
+                            "X",
+                            ha="center",
+                            va="bottom",
+                            fontsize=15,
+                            fontweight="bold",  # Add this line to make the text bold
+                            color=COLOR_PALETTE[i],
+                            zorder=4,
+                        )
+
+            # 画曲线图
             for i, (data, label) in enumerate(zip(all_data, labels)):
+                # Create a copy of the data to modify
+                plot_data = data.copy().astype(float)
+
+                # Insert np.nan where value is -1 or -2 to break the line
+                plot_data[(plot_data == -1) | (plot_data == -2)] = np.nan
+
                 ax.plot(
                     x_indices + i * bar_width,
-                    data,
+                    plot_data,
                     color=COLOR_PALETTE[i],
                     # label=label, # ignore the plot label
                     marker="D",
@@ -396,7 +432,9 @@ class Mark(object):
                     zorder=3,
                 )
 
-            y_min, y_max = np.min(all_data) * 0.9, np.max(all_data) * 1.15
+            # y_min, y_max = np.min(all_data) * 0.9, np.max(all_data) * 1.15
+            # always start from zero
+            y_min, y_max = 0.0, np.max(all_data) * 1.15
             ax.set_ylim(y_min, y_max)
 
             ax.legend()
@@ -448,6 +486,13 @@ class Mark(object):
 
             plt.tight_layout()
             if save_path:
+                plt.savefig(
+                    os.path.join(save_path, f"{k}_report.pdf"),
+                    dpi=300,
+                    bbox_inches="tight",
+                    transparent=False,
+                    facecolor="white",
+                )
                 plt.savefig(
                     os.path.join(save_path, f"{k}_report.png"),
                     dpi=300,

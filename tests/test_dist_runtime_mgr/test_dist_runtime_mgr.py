@@ -2,7 +2,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from flash_attn_interface import flex_flash_attn_func
+from flex_flash_attn_interface import flex_flash_attn_func
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 

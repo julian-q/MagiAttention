@@ -1,13 +1,52 @@
-# Distributed Flex-Flash-Attention (A super fast distributed attention solver)
+# MagiAttention
+
+<p align="center">
+    <a href="?"><img alt="paper" src="https://img.shields.io/badge/paper-arxiv:-blue"></a>
+    <a href="https://SandAI-org.github.io/MagiAttention/"><img alt="blog" src="https://img.shields.io/badge/blog-magiattention-purple"></a>
+    <a href="https://github.com/SandAI-org/MagiAttention/releases"><img alt="license" src="https://img.shields.io/badge/release-v1.0.0-green"></a>
+    <a href="https://github.com/SandAI-org/MagiAttention/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache2.0-orange"></a>
+</p>
+
+
+<h4 align="center">
+A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training
+</h4>
 
 <div align="center">
-  <img src="./assets/dffa_logo.png" alt="Logo" width="1000">
+  <img src="./assets/magiattn_overview.png" alt="MaiAttnOverview" width="100%">
 </div>
 
 
-## Installation
+## Latest News 🔥
 
-### Step1: activate the NGC Pytorch Docker container
+- [2025/4] 🎉 Release [MagiAttention-v1.0.0](https://github.com/SandAI-org/MagiAttention/tree/v1.0.0) with its [blog](https://SandAI-org.github.io/MagiAttention/): a distributed attention towards linear scalability for ultra-long context, heterogeneous data training.
+
+
+# About
+
+MagiAttention is a a distributed attention mechanism, or context-parallel (CP) strategy, which aims to support a wide variety of attention mask types with **kernel-level flexibility**, while achieving **linear scalability** with respect to context-parallel (CP) size across a broad range of scenarios, particularly suitable for training tasks involving <u><em>ultra-long, heterogeneous data</em></u> training like video-generation for [Magi-1](https://github.com/SandAI-org/Magi-1).
+
+Additionally, it can be easily integrated into prevalent training frameworks such as [Megatron-LM](https://github.com/NVIDIA/Megatron-LM) and Pytorch's native [FSDP](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), as illustrated in [QuickStart](#quick-start-).
+
+We are committed to continually improving the performance and generality of MagiAttention for the broader research community. Stay tuned for exciting enhancements and new features on the horizon!
+
+
+## Key Features ✨
+
+To realize linear scalability for distributed attention, we implement and introduce key designs as follows.
+
+For implementation details, more experimental results and future works, please visit our [blog](https://SandAI-org.github.io/MagiAttention/#methodology).
+
+- **Flexbile Flash Attention Kernel**. We introduce a generalized formulation for irregular attention mask patterns and implement a flexible flash attention kernel (FFA). It is natively designed for distribution scenarios and provides greater flexibility in handling diverse attention mask types, with performance comparable to [Flash-Attention 3](https://arxiv.org/abs/2407.08608) on Hopper GPUs.
+- **Computation Load-Balance**. With a fine-grained sharding strategies, we elaborate an efficient <em>dispatch solver</em> that ensures balanced attention computational loads across each CP rank in every training iteration.
+- **Zero-Redundant Communication**. Instead of adopting the common Ring-style P2P communication pattern in CP, we propose two novel communication primitives, <em>GroupCast</em> and <em>GroupReduce</em>, built upon All-to-All-v as a prototypal implementation, enabling zero-redundant communication volume for both forward and backward passes.
+- **Adaptive Multi-Stage Overlap**. Leveraging the above enhancements, we further implement a multi-stage compute-communication overlap strategy that effectively hides communication latency and adaptively optimizes overlap through manual or automatic tuning.
+
+
+
+## Installation ⚙️
+
+### Step1: Activate an NGC Pytorch Docker container
 
 * release note: [here](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-02.html#rel-25-02)
 * docker image version: nvcr.io/nvidia/pytorch:25.02-py3
@@ -23,50 +62,320 @@
     docker exec -it {contaier_name} /bin/bash
     ```
 
-
-### Step2: install dffa from source
-
-* command:
-
-    ```bash
-    # 1-1. install dffa for developer
-    pip install -e .
-
-    # 1-2. or, install dffa for user
-    make refresh
-    ```
-
-### Step3: install other required packages
+### Step2: Install required packages
 
 * command:
 
     ```bash
-    # 1-1. install required packages for user
     pip install -r requirements.txt
-
-    # 1-2. or, install required packages for developer
-    pip install -r requirements.txt
-    pip install -r requirements_dev.txt
     ```
 
-### Step4: setup pre-commit (for developer)
 
-* pre-commit:
-    ```bash
-    # after `pip install pre-commit` (done in step3)
-    # you need to set up the hooks for the first time
-    # which might take a while but only need to be done once
-    pre-commit install
+#### Step3: Install MagiAttention from source
 
-    # then each time before you run `git commit`
-    # please run the pre-commit to polish your code
-    pre-commit run -a
+* command:
 
-    # if anything has been automatically fixed
-    # or required to be manually fixed by pre-commit
-    # please rerun `git add` to track the changes
-    # when everything is fixed and ready to be committed
+  ```bash
+  git clone https://github.com/SandAI-org/MagiAttention.git
 
-    # for more detailed information about pre-commit
-    # you can check: https://pre-commit.com/
-    ```
+  cd MagiAttention
+
+  git submodule update --init --recursive
+
+  python setup.py install
+  ```
+
+
+
+## Quick Start 🚀
+
+> [!WARNING]
+> MagiAttention currently only supports Hopper GPUs.
+> We intend to broaden this support in upcoming updates.
+
+
+### Basic Usage
+
+We provide you an example(pseudo-code) of how to use dffa to accelerate distribute attention caculation.
+
+You can refer to the dffa/api/dist_flex_attn_interface.py for more information.
+
+<details>
+<summary>Basic Usage</summary>
+
+```python
+from dffa.api import dist_flash_attn_flex_dispatch, undispatch, calc_attn, squash_batch_dim, full_attention_to_varlen_attention, compute_pad_size   # func tools and interface
+
+# ---  prepare data and args for dffa --- #
+
+# create input data with shape (bs, seqlen, headdim)
+x = torch.randn(
+            batchsize,
+            seqlen,
+            head_dim,
+            device=device,
+            dtype=dtype,
+            requires_grad = True
+        )
+
+# shard batch_dim among dp_group
+_shard_along_batch_dim_among_dp(x, dp_group)
+
+# squash the batch dim, dffa do not support input data with batch dim.
+x = squash_batch_dim(x_with_batch)
+
+# get cu_seqlens_q,k after squashing.
+cu_seqlens_q, cu_seqlens_k = full_attention_to_varlen_attention(
+                                batch_size, seqlen
+                             )
+
+# pad input seqlen for better performance
+pad_size, _ = compute_pad_size(x, cp_size, head_dim)
+
+# get q_ranges and k_ranges from cu_seqlens
+q_ranges: AttnRanges = AttnRanges.from_ranges(
+        torch.stack([cu_seqlens_q[:-1], cu_seqlens_q[1:]], dim=1).tolist()
+    )
+k_ranges: AttnRanges = AttnRanges.from_ranges(
+        torch.stack([cu_seqlens_q[:-1], cu_seqlens_q[1:]], dim=1).tolist()
+    )
+
+total_seqlen_q: int = int(cu_seqlens_q[-1])
+total_seqlen_k: int = int(cu_seqlens_k[-1])
+
+# ---   dffa dispatch   --- #
+
+# dispatch global input tensor to each rank and get the runtime_key
+local_x, dist_attn_runtime_key = dist_flash_attn_flex_dispatch(
+        x = x
+        q_ranges=q_ranges
+        k_ranges=k_ranges,
+        attn_mask_type=AttnMaskType.FULL,
+        total_seqlen_q=total_seqlen_q,
+        total_seqlen_k=total_seqlen_k,
+        pad_size=pad_size,
+        head_dim=head_dim,
+        cp_group=cp_group,
+        is_same_source=True,
+        is_q_permutable=True,
+        is_k_permutable=True,
+        dist_attn_config=DistAttnConfig(
+                 dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
+                 overlap_config=OverlapConfig(
+                 enable=True,
+                 mode=AttnOverlapMode.STATIC,
+                 degree=2,
+                 min_chunk_size=512,
+                 max_num_chunks=64,
+                 alg=OverlapAlgType.UNIFORM,
+                ),
+            ),
+        )
+
+"""
+you can also use the flash-attn varlen like interface:
+
+local_x, dist_attn_runtime_key = dist_flash_attn_varlen_dispatch(
+        x,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        head_dim=head_dim,
+        pad_size=pad_size,
+        cp_group=cp_group,
+        causal=LlamaConfig().is_casual,
+        dist_attn_config=dist_attn_config,
+    )
+
+"""
+
+......
+
+
+# ---  dffa calculation and undispatch  --- #
+# do q k v projection
+local_q, local_k, local_v = q_project(local_x), k_project(local_k), v_project(local_v)
+
+# Do local attention computation with runtime key
+local_out, _ = calc_attn(local_q, local_k, local_v, dist_attn_runtime_key)
+
+# Gather local attention results to global result with runtime key
+total_out = undispatch(local_out, dist_attn_runtime_key)
+```
+</details>
+
+
+### Examples to integrate with FSDP
+
+We provide an example of how to intergrate dffa with fsdp in `example/torch_native`. You can use `bash run.sh` to run the example.
+
+In this example, we build a llama-1b model and apply fsdp2 with dffa as the parallelism strategy. Here's the key changes:
+
+<details>
+<summary>Key Changes</summary>
+
+- `modeling_llama.py`: dist_attn_runtime_key is necessary in ffa attention caculation, so we need to pass it to llama model.
+
+
+```python
+
+class LlamaAttention:
+    def forward(..., dffa_runtime_key: DistAttnRuntimeKey):
+        ...
+
+        # ffa as the attn backend which only supports (t, nh, nd) as input and ffa only supports fp16/bf16 for now
+        o = calc_attn(q, k, v, dffa_runtime_key)[0]
+
+        ...
+
+class LlamaDecoderLayer:
+
+    def forward(..., dffa_runtime_key: DistAttnRuntimeKey):
+        ...
+
+        LlamaAttention(..., dffa_runtime_key)
+
+        ...
+
+class LlamaModel:
+
+    def forward(..., dffa_runtime_key: DistAttnRuntimeKey):
+        ...
+
+        LlamaDecoderLayer(..., dffa_runtime_key)
+
+        ...
+```
+
+- `main training loop`: you can refer basic usage and example/torch_native/main.py
+
+</details>
+
+
+### Examples to integrate with Megatron-LM
+
+comming soon ...
+
+
+## Documentation
+
+comming soon ...
+
+
+## Performance Benchmarks 📊
+
+
+### Kernel-Level Performance and Flexibility
+
+To demonstrate FFA kernels' state-of-the-art performance and flexibility in handling ultra-long, heterogeneous data training, we measure the computing power (in $\texttt{TFLOPs/s}$) on Hopper GPUs for both forward and backward passes of prevalent attention kernels across standard and irregular mask patterns.
+
+| settings              | value                                                                          |
+|-----------------------|-----------------------------------------------------------------------------|
+| batch size (b)        | 1                                                                            |
+| number of heads (nh)  | nhq:nhk:nhv = 64:8:8 (GQA)                                    |
+| head dimension (hd)   | 128                                                                           |
+| dtype                 | torch.bfloat16                                                               |
+| dropout probability   | 0.0                                                                          |
+| window size           | 1024 (for sliding window masks only)                        |
+
+Benchmark settings: for each mask pattern, we vary the sequence length `seqlen` from $4k,8k,16k,...,$ up to $128k$ (`seqlen_q = seqlen_k = seqlen`) while measuring computation power (in $\texttt{TFLOPs/s}$) for forward and backward passes of different attention kernels. Other configurations are fixed using common training settings (see the table above) to focus on the impact of sequence length and mask pattern. For the varlen packed data, we simply follow the variable sequence length distribution in the open-sourced dataset [ChatQA2-Long-SFT-data](https://huggingface.co/datasets/nvidia/ChatQA2-Long-SFT-data), from which we sample to pack and pad to the required `seqlen`.
+
+Some Results are reported in the following figures, see more in our [blog](https://SandAI-org.github.io/MagiAttention/#kernel-level).
+
+
+<div align="center">
+  <img src="./assets/ffa_exp/ffa_perf_report_full_all_family.png" alt="full mask ffa" width="100%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for full mask scenarios.</div>
+</div>
+
+<div align="center">
+  <img src="./assets/ffa_exp/ffa_perf_report_causal_all_family.png" alt="causal mask ffa" width="100%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for causal mask scenarios.</div>
+</div>
+
+<div align="center">
+  <img src="./assets/ffa_exp/ffa_perf_report_varlen_full_all_family.png" alt="varlen full mask ffa" width="100%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen full mask scenarios.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises `Cuda Out of Memory` error in that specific configuration.</div>
+</div>
+
+<div align="center">
+  <img src="./assets/ffa_exp/ffa_perf_report_varlen_causal_all_family.png" alt="varlen causal mask ffa" width="100%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen causal mask scenarios.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises `Cuda Out of Memory` error in that specific configuration.</div>
+</div>
+
+
+### Module-Level Scalability
+
+
+To validate the scalability of MagiAttention, we assess the per-GPU computing power (in $\texttt{TFLOPs/s/GPU}$) of the attention module during both forward and backward propagation, as the sequence length and parallel size increase. This assessment is compared against common CP strategies including [Ring-Attention](https://arxiv.org/abs/2310.01889) and [Ulysses](https://arxiv.org/abs/2309.14509). Due to the complexity of supporting irregular masks for baselines, our experiments are limited to the full mask and varlen full mask scenarios. And the distribution of variable sequence lengths still follow the one in [Kernel-Level Experiments](#kernel-level-performance-and-flexibility).
+
+The experiments are conducted on a large-scale productive GPU cluster (<em>Due to business and confidentiality reasons, specific details about the productive cluster, such as the number and type of GPUs, are withheld.</em>). We scale the total sequence length `seqlen`, the context-parallel size `cp_size`, and the node size `nnodes` together from `seqlen:64k, cp_size:1, nnodes:1`, `seqlen:128k, cp_size:2, nnodes:2`, ..., to `seqlen:3072k (3M), cp_size:48, nnodes:48`.
+
+The tensor-parallel size `tp_size` is fixed at 8, with sequence-parallel enabled. Other data and model configurations for different mask types are the same as in the table in [Kernel-Level Experiments](#kernel-level-performance-and-flexibility).
+
+Therefore, in every training setting, each rank is assigned constantly with `seqlen=64k`, `num_heads_q = 8` and `num_heads_k = 1` for attention propagation, while the remaining activations stays `seqlen=8k`, `num_heads_q = 64` and `num_heads_k = 8` with SP enabled. This setup simulates a common training configuration.
+
+Some of the results are presented in the following figures, see more in our [blog](https://SandAI-org.github.io/MagiAttention/#module-level).
+
+As demonstrated, MagiAttention exhibits linear scalability as the context length and CP size increase, in both full mask and varlen full mask configurations, for both forward and backward passes. In contrast, baseline methods either face strict limitations in scaling up or experience performance degradation with ultra-long contexts, which worsens with varlen mask patterns.
+
+
+<div align="center">
+  <img src="./assets/dffa_exp/full_mask_fwd_per_gpu/flops_report.png" alt="full mask dffa fwd" width="49%">
+  <img src="./assets/dffa_exp/full_mask_bwd_per_gpu/flops_report.png" alt="full mask dffa bwd" width="49%">
+</div>
+
+<div align="center">
+  <img src="./assets/dffa_exp/varlen_full_mask_fwd_per_gpu/flops_report.png" alt="varlen full mask dffa fwd" width="49%">
+  <img src="./assets/dffa_exp/varlen_full_mask_bwd_per_gpu/flops_report.png" alt="varlen full mask dffa bwd" width="49%">
+</div>
+
+
+## Contributing 🤝
+
+We welcome and value any contributions and collaborations. Please check out [CONTRIBUTING.md](./CONTRIBUTING.md) for how to get involved.
+
+
+## Contributors
+
+<a href="https://github.com/NUS-HPC-AI-Lab/VideoSys/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=SandAI-org/MagiAttention"/>
+</a>
+
+
+## License ⚖️
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+
+## Citation 📝
+
+If you use MagiAttention in your research, please cite:
+
+```bibtex
+@misc{magiattention2025,
+  title={MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training},
+  author={Zewei, Tao and Yunpeng, Huang},
+  year={2025},
+  howpublished={\url{https://github.com/SandAI-org/MagiAttention/}},
+}
+```
+
+## Acknowledgement
+
+We are grateful to the contributors listed below for their valuable contributions during the early stages of MagiAttention.
+
+| Member   | Affiliations         | Email                        | GitHub Account    |
+|:-----------|:-------------|:----------------------------|:---------------|
+| Zewei Tao    | SandAI       | zeweitao@sand.ai            | littsk         |
+| Yunpeng Huang    | SandAI, Nanjing University       | yunpenghuang@sand.ai,hyp@smail.nju.edu.cn       | Strivin0311    |
+| Qiangang Wang    | Nanjing University | 522024330081@smail.nju.edu.cn | WT1W           |
+| Hanwen Sun   | SandAI, Beijing University |  shw20010329@163.com |  hanwen-sun  |
+| Tao Bu      | Nanjing University | 502024330002@smail.nju.edu.cn | Big-TRex       |
+| WenYang Fang    | Nanjing University | fwy@smail.nju.edu.cn        | kagami4243     |
+| Siyuang Yan    | Nanjing University | siyuanyan@smail.nju.edu.cn  | FibonaccciYan  |
+| Zixu Jiang     | Nanjing University | 522023330040@smail.nju.edu.cn | 191220042      |
+| Dingkun Xu    | Nanjing University | 211220090@smail.nju.edu.cn  | PureDimension  |
+| Mingyu Liang    | Nanjing University |   mingyuliang518@gmail.com     | gaomusiki      |
+| Jingwei Xu    | Nanjing University | jingweix@nju.edu.cn | paragonlight   |

@@ -1865,12 +1865,12 @@ def create_cu_seqlens_causal(
     cu_seqlens_padded = cu_seqlens_padded // (2 * cp_size)
     seqlens_padded = cu_seqlens_padded[1:] - cu_seqlens_padded[:-1]
     seqlens_unpad = cu_seqlens[1:] - cu_seqlens[:-1]
-    casual_seqlens = seqlens_padded * (rank + 1)
-    seqlens_unpad = torch.min(seqlens_unpad, casual_seqlens)
-    cu_seqlens_casual = torch.zeros_like(cu_seqlens)
-    cu_seqlens_casual[1:].add_(seqlens_unpad)
-    cu_seqlens_casual.cumsum_(dim=0)
-    return cu_seqlens_casual
+    causal_seqlens = seqlens_padded * (rank + 1)
+    seqlens_unpad = torch.min(seqlens_unpad, causal_seqlens)
+    cu_seqlens_causal = torch.zeros_like(cu_seqlens)
+    cu_seqlens_causal[1:].add_(seqlens_unpad)
+    cu_seqlens_causal.cumsum_(dim=0)
+    return cu_seqlens_causal
 
 
 def thd_store_half_tensor(
