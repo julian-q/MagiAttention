@@ -153,3 +153,74 @@
       primaryClass={cs.LG},
       url={https://arxiv.org/abs/2407.08608}, 
 }
+
+@misc{pytorch_sdpa,
+    author       = {PyTorch},
+    title        = {torch.nn.functional.scaled\_dot\_product\_attention - PyTorch 2.6 documentation},
+    howpublished = {\url{https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html}},
+}
+
+@misc{dong2024flexattentionprogrammingmodel,
+      title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels}, 
+      author={Juechu Dong and Boyuan Feng and Driss Guessous and Yanbo Liang and Horace He},
+      year={2024},
+      eprint={2412.05496},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2412.05496}, 
+}
+
+@misc{wang2025flashmaskefficientrichmask,
+      title={FlashMask: Efficient and Rich Mask Extension of FlashAttention}, 
+      author={Guoxia Wang and Jinle Zeng and Xiyuan Xiao and Siming Wu and Jiabin Yang and Lujing Zheng and Zeyu Chen and Jiang Bian and Dianhai Yu and Haifeng Wang},
+      year={2025},
+      eprint={2410.01359},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2410.01359}, 
+}
+
+@misc{nvidia2024accelerating,
+  author = {NVIDIA},
+  title = {Accelerating Transformers with NVIDIA cuDNN 9},
+  howpublished = {\url{https://developer.nvidia.com/blog/accelerating-transformers-with-nvidia-cudnn-9/}},
+  year = {2024},
+  note = {Accessed: 2024-12-12}
+}
+
+@misc{gale2022megablocks,
+      title={MegaBlocks: Efficient Sparse Training with Mixture-of-Experts}, 
+      author={Trevor Gale and Deepak Narayanan and Cliff Young and Matei Zaharia},
+      year={2022},
+      eprint={2211.15841},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+
+@article{zhao2023pytorch,
+  title={Pytorch FSDP: experiences on scaling fully sharded data parallel},
+  author={Zhao, Yanli and Gu, Andrew and Varma, Rohan and Luo, Liang and Huang, Chien-Chin and Xu, Min and Wright, Less and Shojanazeri, Hamid and Ott, Myle and Shleifer, Sam and others},
+  journal={arXiv preprint arXiv:2304.11277},
+  year={2023}
+}
+
+@misc{async_tensor_parallelism_in_pytorch,
+    title        = {[Distributed w/ TorchTitan] Introducing Async Tensor Parallelism in PyTorch},
+    author       = {Horace He and Less Wright and Luca Wehrstedt and Tianyu Liu and Wanchao Liang},
+    year         = {2024},
+    howpublished = {\url{https://discuss.pytorch.org/t/distributed-w-torchtitan-introducing-async-tensor-parallelism-in-pytorch/209487}},
+}
+
+@misc{cuda_device_max_connections_issue,
+    title        = {[QUESTION] Why should CUDA\_DEVICE\_MAX\_CONNECTIONS=1 should be set when using seq\_parallel or async comm?},
+    author       = {GitHub User},
+    year         = {2023},
+    howpublished = {\url{https://github.com/NVIDIA/Megatron-LM/issues/533}},
+}
+
+@misc{collectives_nccl_stream_issue,
+  author       = {GitHub User},
+  title = {Allow passing CUDA stream to the NCCL collectives (specially the functional collectives)},
+  howpublished = {\url{https://github.com/pytorch/pytorch/issues/137390}},
+  year = {2024},
+}
