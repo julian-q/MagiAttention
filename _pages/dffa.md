@@ -87,13 +87,10 @@ _styles: >
 
 <div class="l-middle">
   <img src="assets/img/magiattn/magiattn_overview_high.png" width="100%">
-  <div class="caption">
+  <div class="caption left">
     Overview of MagiAttention: (1) FFA, an efficient kernel based on Flash-Attention 3, supports flexible mask patterns; (2) The dispatch solver shards and dispatches packed data with ultra-long contexts and heterogeneous masks, ensuring load-balanced computation; (3) Group-Cast and Group-Reduce primitives eliminate redundant communication; (4) The overlap solver adaptively partitions communication for optimal overlap; (5) During runtime, MagiAttention propagates with flexible and efficient kernels, zero-redundant communication, and multi-stage overlap scheduling, achieving linear scalability.
   </div>
 </div>
-
-
-## Abstract
 
 Training large-scale models for video generation presents two major challenges: (1) The extremely long context length of video tokens, which reaching up to 4 million during training, results in prohibitive computational and memory overhead. (2) The combination of block-causal attention and Packing-and-Padding (PnP) introduces highly complex attention mask patterns. 
 
@@ -129,7 +126,7 @@ Worse still, for irregular attention mask patterns like the aforementioned varle
 
 <div class="l-middle" align="center">
   <img src="assets/img/magiattn/ring_attn_load_balance.png" width="80%">
-  <div class="caption">
+  <div class="caption left">
     Illustration of Ring-Attention’s customized sharding strategies for load balancing. (a) Full mask uses sequential sharding for the global mask; (b) Causal mask employs tailored <em>zigzag sharding</em><d-cite key="ring_flash_attention_issue2"></d-cite>; (c) Varlen full mask applies sequential sharding per local mask (one per packed sample); (d) Varlen causal mask uses <em>zigzag sharding</em> per local mask, causing performance degradation from fragmentation and padding.
   </div>
 </div>
@@ -151,7 +148,7 @@ Therefore, we introduce Flex-Flash-Attention (FFA), which is natively designed f
 
 <div class="l-middle">
   <img src="assets/img/magiattn/attnslice_interpret.png" width="100%">
-  <div class="caption">
+  <div class="caption left">
     Illustration of $\mathrm{AttnSlice}$ formulation for some irregular mask. It decomposes the original mask into multiple $\mathrm{AttnSlice}$s and allows re-expression of fractal masks after rearrangement across CP ranks, making it suitable for distributed attention. Note that computation load balance across CP ranks is not considered in this illustration.
   </div>
 </div>
@@ -162,7 +159,7 @@ Using this formulation, as shown in the figure below, a wide variety of commonly
 
 <div class="l-middle">
   <img src="assets/img/magiattn/mask_with_attn_slice.png" width="100%">
-  <div class="caption">
+  <div class="caption left">
     Examples of mask patterns formulated by $\mathrm{AttnSlice}$. (a)-(d) Standard FA3-compatible patterns; (e)-(h) Irregular masks beyond Flash-Attention's capabilities, including the varlen block-causal mask, which FFA supports seamlessly while maintaining performance comparable to FA3.
   </div>
 </div>
@@ -213,7 +210,7 @@ To address this, as illustrated in the figure below, we introduce two communicat
 
 <div class="l-middle">
   <img src="assets/img/magiattn/group-gather-reduce-all2allv.png" width="100%">
-  <div class="caption">
+  <div class="caption left">
     Illustration of Group-Cast/Group-Reduce primitives for zero redundancy, using the varlen block-causal mask with the last global block as an example for irregular patterns. (a) In both forward and backward passes, the Group-Cast primitive internally analyzes and generates a transfer table for $\mathrm{KV}$ send/receive buffers, and launches the underlying All-to-All-v to complete communication with our custom $\texttt{Range Gather}$ kernel for pre-/post-processing. (b) In the backward pass, Group-Reduce similarly handles the partial $\mathrm{dKV}$ communication for reduction, using All-to-All-v with the \texttt{Range Gather} kernel for pre-processing and the $\texttt{Range Scatter-Reduce}$ kernel for post-processing.
   </div>
 </div>
@@ -229,7 +226,7 @@ Similar to prior works<d-cite key="liu2023ringattentionblockwisetransformers,zha
 
 <div class="l-middle">
   <img src="assets/img/magiattn/multi_stage_overlap_fwd_bwd.png" width="100%">
-  <div class="caption">
+  <div class="caption left">
     Schematic of Magi Attention's multi-stage overlap scheduling. (a) Forward pass: 4-stage scheduling overlaps computation (partial attention outputs and $\textit{lse}$ factors) with prefetching of next-stage $\mathrm{KV}$ requests (where applicable), hiding all communication overhead with the final stage's computation exposed. (b) Backward pass: 3-stage scheduling overlaps computation (partial $\mathrm{dQ}$, $\mathrm{dKV}$) with prefetching of next-stage $\mathrm{KV}$ requests and reduction of prior $\mathrm{dKV}$ requests, hiding all communication overhead except the $\mathrm{dKV}$ reduction of the final stage.
   </div>
 </div>
@@ -258,27 +255,49 @@ To demonstrate FFA kernels' state-of-the-art performance and flexibility in hand
 | settings              | value                                                                          |
 |-----------------------|-----------------------------------------------------------------------------|
 | batch size (b)        | 1                                                                            |
-| number of heads (nh)  | nhq:nhk:nhv = 48:8:8 (GQA)                                    |
+| number of heads (nh)  | nhq:nhk:nhv = 64:8:8 (GQA)                                    |
 | head dimension (hd)   | 128                                                                           |
 | dtype                 | torch.bfloat16                                                               |
 | dropout probability   | 0.0                                                                          |
 | window size           | 1024 (for sliding window masks only)                        |
 
-Benchmark settings: for each mask pattern, we vary the sequence length $seqlen$ from $4k,8k,16k,...,$ up to $128k$ ($seqlen_q = seqlen_k = seqlen$) while measuring computation power (in $\texttt{TFLOPs/s}$) for forward and backward passes of different attention kernels. Other configurations are fixed using common training settings (see the table above) to focus on the impact of sequence length and mask pattern.
+Benchmark settings: for each mask pattern, we vary the sequence length $seqlen$ from $4k,8k,16k,...,$ up to $128k$ ($seqlen_q = seqlen_k = seqlen$) while measuring computation power (in $\texttt{TFLOPs/s}$) for forward and backward passes of different attention kernels. Other configurations are fixed using common training settings (see the table above) to focus on the impact of sequence length and mask pattern. For the varlen packed data, we simply follow the variable sequence length distribution in the open-sourced dataset<d-cite key="xu2024chatqa"></d-cite> illustrated in the following figure, from which we sample to pack and pad to the required $seqlen$.
+
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/varlen_seqlen_distribution.png" width="80%">
+  <div class="caption">
+    Distribution of sequence lengths in the dataset<d-cite key="xu2024chatqa"></d-cite>, used to sample and construct the variable-length data for both kernel-level and module-level experiments of MagiAttention.
+  </div>
+</div>
+
 
 Results are reported in the following figures.
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ffa_perf_report_full_all_family.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_full_all_family.png" width="100%">
   <div class="caption">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for full mask scenarios.
   </div>
 </div>
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ffa_perf_report_causal_all_family.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_causal_all_family.png" width="100%">
   <div class="caption">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for causal mask scenarios.
+  </div>
+</div>
+
+<div class="l-middle">
+  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_varlen_full_all_family.png" width="100%">
+  <div class="caption left">
+    Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen full mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration.)
+  </div>
+</div>
+
+<div class="l-middle">
+  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_varlen_causal_all_family.png" width="100%">
+  <div class="caption left">
+    Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen causal mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration.)
   </div>
 </div>
 
@@ -288,28 +307,30 @@ Results are reported in the following figures.
 
 To validate the scalability of MagiAttention, we assess the computing power (in $\texttt{TFLOPs/s}$) of the attention module propagation as the sequence length and parallel size increases for both forward and backward passes across various mask patterns, and compare it with several state-of-the-art CP strategies.
 
-The experiments are conducted on a large-scale productive GPU cluster<d-footnote>Due to business and confidentiality reasons, specific details about the productive cluster, such as the number and type of GPUs, are withheld.</d-footnote>. We scale the total sequence length $\textit{seqlen}$, the context-parallel size $\textit{cp_size}$, and the node size $\textit{nnodes}$ together from $(\textit{seqlen}:64k, \textit{cp_size}:1, nnodes:1)$, $(\textit{seqlen}:128k, \textit{cp_size}:2, nnodes:2)$, ..., to $(\textit{seqlen}:3840k (\sim 4M), \textit{cp_size}:60, nnodes:60)$. 
+To validate the scalability of MagiAttention, we assess the per-GPU computing power (in $\texttt{TFLOPs/s/GPU}$) of the attention module during both forward and backward propagation, as the sequence length and parallel size increase. This assessment is compared against common CP strategies including Ring-Attention<d-cite key="liu2023ringattentionblockwisetransformers"></d-cite> and Ulysses<d-cite key="jacobs2023deepspeed"></d-cite>. Due to the complexity of supporting irregular masks for baselines, our experiments are limited to the full mask and varlen full mask scenarios. And the distribution of variable sequence lengths still follow the one in [Kernel-level Experiments](#kernel-level).
+
+The experiments are conducted on a large-scale productive GPU cluster<d-footnote>Due to business and confidentiality reasons, specific details about the productive cluster, such as the number and type of GPUs, are withheld.</d-footnote>. We scale the total sequence length $\textit{seqlen}$, the context-parallel size $\textit{cp_size}$, and the node size $\textit{nnodes}$ together from $(\textit{seqlen}:64k, \textit{cp_size}:1, nnodes:1)$, $(\textit{seqlen}:128k, \textit{cp_size}:2, nnodes:2)$, ..., to $(\textit{seqlen}:3072k\;(3M), \textit{cp_size}:48, nnodes:48)$. 
 
 The tensor-parallel size $\textit{tp_size}$ is fixed at 8, with sequence-parallel enabled. Other data and model configurations for different mask types are the same as in the table in [Kernel-Level Experiments](#kernel-level).
 
-Therefore, in every training setting, each rank is assigned a constant 64k $\textit{seqlen}$ for attention propagation, while the $\textit{seqlen}$ of remaining activations stays 8k. This setup simulates a common training configuration.
+Therefore, in every training setting, each rank is assigned constantly with $seqlen=64k$, $\textit{num_heads_q} = 8$ and $\textit{num_heads_k} = 1$ for attention propagation, while the remaining activations stays $seqlen=8k$, $\textit{num_heads_q} = 64$ and $\textit{num_heads_k} = 8$ with SP enabled. This setup simulates a common training configuration.
 
 The results are presented in the following figures.
 
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/scale/full_mask_fwd_per_gpu/flops_report.png" width="49%">
-  <img src="assets/img/magiattn/scale/full_mask_bwd_per_gpu/flops_report.png" width="49%">
-  <div class="caption">
-    Benchmarking MaiAttention's scalability against other leading CP strategies for full mask scenarios.
+  <img src="assets/img/magiattn/dffa_exp/full_mask_fwd_per_gpu/flops_report.png" width="49%">
+  <img src="assets/img/magiattn/dffa_exp/full_mask_bwd_per_gpu/flops_report.png" width="49%">
+  <div class="caption left">
+    Benchmarking MaiAttention's scalability against other leading CP strategies for full mask scenarios. (Note that: the $\mathbf{X}$ symbol indicates the corresponding distributed attention implementation is not supported in that specific configuration.)
   </div>
 </div>
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/scale/varlen_full_mask_fwd_per_gpu/flops_report.png" width="49%">
-  <img src="assets/img/magiattn/scale/varlen_full_mask_bwd_per_gpu/flops_report.png" width="49%">
-  <div class="caption">
-    Benchmarking MaiAttention's scalability against other leading CP strategies for varlen full mask scenarios.
+  <img src="assets/img/magiattn/dffa_exp/varlen_full_mask_fwd_per_gpu/flops_report.png" width="49%">
+  <img src="assets/img/magiattn/dffa_exp/varlen_full_mask_bwd_per_gpu/flops_report.png" width="49%">
+  <div class="caption left">
+    Benchmarking MaiAttention's scalability against other leading CP strategies for varlen full mask scenarios. (Note that: the $\mathbf{X}$ symbol indicates the corresponding distributed attention implementation is not supported in that specific configuration.)
   </div>
 </div>
 
