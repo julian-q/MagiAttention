@@ -257,10 +257,9 @@ To demonstrate FFA kernels' state-of-the-art performance and flexibility in hand
 | number of heads (nh)  | nhq:nhk:nhv = 64:8:8 (GQA)                                    |
 | head dimension (hd)   | 128                                                                           |
 | dtype                 | torch.bfloat16                                                               |
-| dropout probability   | 0.0                                                                          |
 | window size           | 1024 (for sliding window masks only)                        |
 
-Benchmark settings: for each mask pattern, we vary the sequence length $seqlen$ from $4k,8k,16k,...,$ up to $128k$ ($seqlen_q = seqlen_k = seqlen$) while measuring computation power (in $\texttt{TFLOPs/s}$) for forward and backward passes of different attention kernels. Other configurations are fixed using common training settings (see the table above) to focus on the impact of sequence length and mask pattern. For the varlen packed data, we simply follow the variable sequence length distribution in the open-sourced dataset<d-cite key="xu2024chatqa"></d-cite> illustrated in the following figure, from which we sample to pack and pad to the required $seqlen$.
+Benchmark settings: for each mask pattern, we vary the sequence length $seqlen$ from $4k,8k,16k,...,$ up to $128k$ ($seqlen_q = seqlen_k = seqlen$) while measuring the throughput (in $\texttt{TFLOPs/s}$) for forward and backward passes of different attention kernels. Other configurations are fixed using common training settings (see the table above) to focus on the impact of sequence length and mask pattern. For the varlen packed data, we simply follow the variable sequence length distribution in the open-sourced dataset<d-cite key="xu2024chatqa"></d-cite> illustrated in the following figure, from which we sample to pack and pad to the required $seqlen$.
 
 <div class="l-middle" align="center">
   <img src="assets/img/magiattn/varlen_seqlen_distribution.png" width="80%">
@@ -273,30 +272,37 @@ Benchmark settings: for each mask pattern, we vary the sequence length $seqlen$ 
 Results are reported in the following figures.
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_full_all_family.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/attn with fulll mask/perf_report_all.png" width="100%">
   <div class="caption">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for full mask scenarios.
   </div>
 </div>
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_causal_all_family.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/attn with causal mask/perf_report_all.png" width="100%">
   <div class="caption">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for causal mask scenarios.
   </div>
 </div>
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_varlen_full_all_family.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/attn with varlen full mask/perf_report_all.png" width="100%">
   <div class="caption left">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen full mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration.)
   </div>
 </div>
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ffa_exp/ffa_perf_report_varlen_causal_all_family.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/attn with varlen causal mask/perf_report_all.png" width="100%">
   <div class="caption left">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen causal mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration.)
+  </div>
+</div>
+
+<div class="l-middle">
+  <img src="zeus/assets/img/magiattn/ffa_exp/attn with sw causal mask/perf_report_all.png" width="100%">
+  <div class="caption left">
+    Benchmarking FFA's performance and flexibility against other leading attention kernels for sliding-window causal mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration.)
   </div>
 </div>
 
