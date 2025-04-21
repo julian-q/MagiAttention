@@ -9,7 +9,7 @@
 
 
 <h4 align="center">
-A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training
+A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training
 </h4>
 
 <div align="center">
@@ -19,12 +19,12 @@ A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heter
 
 ## Latest News 🔥
 
-- [2025/4] 🎉 Release [MagiAttention-v1.0.0](https://github.com/SandAI-org/MagiAttention/tree/v1.0.0) with its [blog](https://SandAI-org.github.io/MagiAttention/): a distributed attention towards linear scalability for ultra-long context, heterogeneous data training.
+- [2025/4] 🎉 Release [MagiAttention-v1.0.0](https://github.com/SandAI-org/MagiAttention/tree/v1.0.0) with its [blog](https://SandAI-org.github.io/MagiAttention/): a distributed attention towards linear scalability for ultra-long context, heterogeneous mask training.
 
 
 # About
 
-MagiAttention is a distributed attention mechanism, or context-parallel (CP) strategy, which aims to support a wide variety of attention mask types with **kernel-level flexibility**, while achieving **linear scalability** with respect to context-parallel (CP) size across a broad range of scenarios, particularly suitable for training tasks involving <u><em>ultra-long, heterogeneous data</em></u> training like video-generation for [Magi-1](https://github.com/SandAI-org/Magi-1).
+MagiAttention is a distributed attention mechanism, or context-parallel (CP) strategy, which aims to support a wide variety of attention mask types with **kernel-level flexibility**, while achieving **linear scalability** with respect to context-parallel (CP) size across a broad range of scenarios, particularly suitable for training tasks involving <u><em>ultra-long, heterogeneous mask</em></u> training like video-generation for [Magi-1](https://github.com/SandAI-org/Magi-1).
 
 Additionally, it can be easily integrated into prevalent training frameworks such as [Megatron-LM](https://github.com/NVIDIA/Megatron-LM) and Pytorch's native [FSDP](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), as illustrated in [QuickStart](#quick-start-).
 
@@ -228,7 +228,7 @@ Coming soon ...
 
 ### Kernel-Level Performance and Flexibility
 
-To demonstrate FFA kernels' state-of-the-art performance and flexibility in handling ultra-long, heterogeneous data training, we measure the computing power (in $\texttt{TFLOPs/s}$) on Hopper GPUs for both forward and backward passes of prevalent attention kernels across standard and irregular mask patterns.
+To demonstrate FFA kernels' state-of-the-art performance and flexibility in handling ultra-long, heterogeneous mask training, we measure the computing power (in $\texttt{TFLOPs/s}$) on Hopper GPUs for both forward and backward passes of prevalent attention kernels across standard and irregular mask patterns.
 
 | settings              | value                                                                          |
 |-----------------------|-----------------------------------------------------------------------------|
@@ -245,25 +245,31 @@ Some Results are reported in the following figures, see more in our [blog](https
 
 
 <div align="center">
-  <img src="./assets/ffa_exp/ffa_perf_report_full_all_family.png" alt="full mask ffa" width="100%">
+  <img src="assets/ffa_exp/attn with fulll mask/perf_report_all.png" alt="full mask ffa" width="100%">
   <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for full mask scenarios.</div>
 </div>
 
 <div align="center">
-  <img src="./assets/ffa_exp/ffa_perf_report_causal_all_family.png" alt="causal mask ffa" width="100%">
+  <img src="assets/ffa_exp/attn with causal mask/perf_report_all.png" alt="causal mask ffa" width="100%">
   <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for causal mask scenarios.</div>
 </div>
 
 <div align="center">
-  <img src="./assets/ffa_exp/ffa_perf_report_varlen_full_all_family.png" alt="varlen full mask ffa" width="100%">
+  <img src="assets/ffa_exp/attn with varlen full mask/perf_report_all.png" alt="varlen full mask ffa" width="100%">
   <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen full mask scenarios.</div>
-  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises `Cuda Out of Memory` error in that specific configuration.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises <u>Cuda Out of Memory</u> error in that specific configuration.</div>
 </div>
 
 <div align="center">
-  <img src="./assets/ffa_exp/ffa_perf_report_varlen_causal_all_family.png" alt="varlen causal mask ffa" width="100%">
+  <img src="assets/ffa_exp/attn with varlen causal mask/perf_report_all.png" alt="varlen causal mask ffa" width="100%">
   <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen causal mask scenarios.</div>
-  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises `Cuda Out of Memory` error in that specific configuration.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises <u>Cuda Out of Memory</u> error in that specific configuration.</div>
+</div>
+
+<div align="center">
+  <img src="assets/ffa_exp/attn with sw causal mask/perf_report_all.png" alt="varlen causal mask ffa" width="100%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking FFA's performance and flexibility against other leading attention kernels for sliding-window causal mask scenarios.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>E</b> symbol indicates the corresponding distributed attention implementation raises <u>Cuda Out of Memory</u> error in that specific configuration.</div>
 </div>
 
 
@@ -286,11 +292,15 @@ As demonstrated, MagiAttention exhibits linear scalability as the context length
 <div align="center">
   <img src="./assets/magi_attention_exp/full_mask_fwd_per_gpu/flops_report.png" alt="full mask magi_attention fwd" width="49%">
   <img src="./assets/magi_attention_exp/full_mask_bwd_per_gpu/flops_report.png" alt="full mask magi_attention bwd" width="49%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking MaiAttention's scalability against other leading CP strategies for full mask scenarios.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>X</b> symbol indicates the corresponding distributed attention implementation is not supported in that specific configuration.</div>
 </div>
 
 <div align="center">
   <img src="./assets/magi_attention_exp/varlen_full_mask_fwd_per_gpu/flops_report.png" alt="varlen full mask magi_attention fwd" width="49%">
   <img src="./assets/magi_attention_exp/varlen_full_mask_bwd_per_gpu/flops_report.png" alt="varlen full mask magi_attention bwd" width="49%">
+  <div style="font-style: italic; margin-top: 5px;">Benchmarking MaiAttention's scalability against other leading CP strategies for varlen full mask scenarios.</div>
+  <div style="font-style: italic; margin-top: 5px;">Note that: the <b>X</b> symbol indicates the corresponding distributed attention implementation is not supported in that specific configuration.</div>
 </div>
 
 
@@ -317,7 +327,7 @@ If you use MagiAttention in your research, please cite:
 
 ```bibtex
 @misc{magiattention2025,
-  title={MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training},
+  title={MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training},
   author={Zewei, Tao and Yunpeng, Huang},
   year={2025},
   howpublished={\url{https://github.com/SandAI-org/MagiAttention/}},
