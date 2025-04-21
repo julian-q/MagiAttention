@@ -221,7 +221,7 @@ attn_mask_type = [AttnMaskType.FULL] * 7
 pad_size, _ = compute_pad_size(total_seqlen_q, cp_size, head_dim)
 
 local_x, magi_attn_runtime_key = magi_attn_flex_dispatch( # local_x with shape (total_seqlen_q + pad_size) / cp_size, h)
-                x, 
+                x,
                 q_ranges=q_ranges,
                 k_ranges=k_ranges,
                 attn_mask_type=attn_mask_type,

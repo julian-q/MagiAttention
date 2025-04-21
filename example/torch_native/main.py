@@ -25,14 +25,13 @@ from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, Partial, Shard, distribute_tensor
 from torch.optim.lr_scheduler import LinearLR
 
-from magi_attention.api import magi_attn_flex_dispatch, undispatch, magi_attn_varlen_dispatch
+from magi_attention.api import magi_attn_varlen_dispatch, undispatch
 from magi_attention.api.functools import (
     compute_pad_size,
     full_attention_to_varlen_attention,
     squash_batch_dim,
 )
-from magi_attention.common import AttnRanges
-from magi_attention.common.enum import AttnMaskType, AttnOverlapMode
+from magi_attention.common.enum import AttnOverlapMode
 from magi_attention.config import (
     DispatchConfig,
     DistAttnConfig,
