@@ -21,7 +21,7 @@ typograms: true
 
 external-links:
   github: https://github.com/SandAI-org/MagiAttention
-  arxiv: https://arxiv.org/abs/2505.14135
+  arxiv: https://github.com/SandAI-org/MagiAttention
 
 authors:
   - name: Zewei Tao
@@ -85,9 +85,9 @@ _styles: >
 ## Overview
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/magiattn_overview_high.png" width="100%">
+  <img src="assets/img/magiattn/magiattn_overview_v2.png" width="100%">
   <div class="caption left">
-    Overview of MagiAttention: (1) FFA, an efficient kernel based on Flash-Attention 3, supports flexible mask patterns; (2) The dispatch solver shards and dispatches packed data with ultra-long contexts and heterogeneous masks, ensuring load-balanced computation; (3) Group-Cast and Group-Reduce primitives eliminate redundant communication; (4) The overlap solver adaptively partitions communication for optimal overlap; (5) During runtime, MagiAttention propagates with flexible and efficient kernels, zero-redundant communication, and multi-stage overlap scheduling, achieving linear scalability.
+    Overview of MagiAttention: (1) FFA, an efficient kernel based on Flash-Attention 3, supports flexible mask patterns; (2) The dispatch solver shards and dispatches packed data with ultra-long contexts and heterogeneous masks, ensuring load-balanced computation; (3) Group-Cast and Group-Reduce primitives eliminate redundant communication; (4) The overlap solver adaptively partitions communication for optimal overlap; (5) Forward and backward timelines of MagiAttention. With all techniques together, MagiAttention reach linear scalability under diverse scenarios.
   </div>
 </div>
 
