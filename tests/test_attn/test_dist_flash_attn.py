@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import torch
 import torch.distributed
 import torch.distributed as dist
@@ -7,12 +21,12 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from dffa.common.ranges import AttnRanges
-from dffa.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
-from dffa.meta.collection.calc_meta import AttnArg, AttnCalcMeta
-from dffa.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
-from dffa.testing import parameterize
-from dffa.testing.dist_common import DistTestBase, with_comms
+from magi_attention.common.ranges import AttnRanges
+from magi_attention.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
+from magi_attention.meta.collection.calc_meta import AttnArg, AttnCalcMeta
+from magi_attention.meta.collection.comm_meta import CommMeta, GroupCollectiveArg
+from magi_attention.testing import parameterize
+from magi_attention.testing.dist_common import DistTestBase, with_comms
 
 
 # TODO: add more unitest for dist ffa especially for causal

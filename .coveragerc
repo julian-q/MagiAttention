@@ -6,7 +6,7 @@
 
 [run]
 # Specify the package/directory for collecting coverage data
-source = dffa
+source = magi_attention
 # Enable parallel mode
 parallel = True
 # Specify concurrency type

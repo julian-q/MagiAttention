@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from collections import defaultdict
 from itertools import accumulate, chain
 
@@ -7,14 +21,14 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from dffa.comm.primitive import group_cast_collective, group_reduce_collective
-from dffa.comm.primitive.utils import (
+from magi_attention.comm.primitive import group_cast_collective, group_reduce_collective
+from magi_attention.comm.primitive.utils import (
     _calc_group_cast_a2a_input_args,
     _calc_group_reduce_a2a_input_args,
     _reduce_to_tensor,
     _unpermute_tensor,
 )
-from dffa.testing.dist_common import DistTestBase, with_comms
+from magi_attention.testing.dist_common import DistTestBase, with_comms
 
 
 def _seqlens2curanges(

@@ -22,7 +22,7 @@ pip install -r requirements.txt
 pip install -r requirements_dev.txt
 ```
 
-then, just run:
+Then, simply run:
 
 ```bash
 pytest tests/
@@ -33,26 +33,23 @@ pytest tests/
 
 ### Code Style
 
-We have some static checks when you commit your code change, please make sure you can pass all the tests and make sure the coding style meets our requirements. We use pre-commit hook to make sure the code is aligned with the writing standard. To set up the code style checking, you need to follow the steps below.
+We have some static checks when you commit your code change, please make sure you can pass all the tests and make sure the coding style follows our requirements. We use pre-commit hook to make sure the code is aligned with the writing standard. To set up the code style checking, you need to follow the steps below.
 
 * pre-commit:
 ```bash
-# after `pip install pre-commit` (done in step3)
-# you need to set up the hooks for the first time
-# which might take a while but only need to be done once
+# Install pre-commit
+pip install pre-commit
+
+# Set up the hook, which may take some time
+# Luckily, this step only needs to be performed once
 pre-commit install
 
-# then each time before you run `git commit`
-# please run the pre-commit to polish your code
+# Then each time before you run `git commit`,
+# please run pre-commit to polish your code
 pre-commit run -a
 
-# if anything has been automatically fixed
-# or required to be manually fixed by pre-commit
-# please rerun `git add` to track the changes
-# when everything is fixed and ready to be committed
-
-# for more detailed information about pre-commit
-# you can check: https://pre-commit.com/
+# For more usage about pre-commit,
+# you may check: https://pre-commit.com/
 ```
 
 Code format checking will be automatically executed when you commit your changes.

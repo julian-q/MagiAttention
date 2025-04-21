@@ -1,20 +1,34 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from typing import Any
 
 import torch
 import torch.distributed as dist
-from flex_flash_attn_interface import flex_flash_attn_func
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-import dffa
-import dffa.testing
-from dffa import init_dist_attn_runtime_mgr
-from dffa.common.enum import AttnMaskType
-from dffa.common.ranges import AttnRanges
-from dffa.config import DistAttnConfig
-from dffa.meta.collection.calc_meta import AttnArg
-from dffa.testing import parameterize
-from dffa.testing.dist_common import DistTestBase, with_comms
+import magi_attention
+import magi_attention.testing
+from magi_attention import init_dist_attn_runtime_mgr
+from magi_attention.common.enum import AttnMaskType
+from magi_attention.common.ranges import AttnRanges
+from magi_attention.config import DistAttnConfig
+from magi_attention.functional.flex_flash_attn import flex_flash_attn_func
+from magi_attention.meta.collection.calc_meta import AttnArg
+from magi_attention.testing import parameterize
+from magi_attention.testing.dist_common import DistTestBase, with_comms
 
 
 class TestDistAttnRuntimeMgr(DistTestBase):
@@ -184,8 +198,8 @@ class TestDistAttnRuntimeMgr(DistTestBase):
             v=xattn_v,
             q_ranges=q_ranges.to_tensor(device=torch.cuda.current_device()),
             k_ranges=xattn_k_ranges.to_tensor(device=torch.cuda.current_device()),
-            is_causal_mapping=torch.zeros(
-                len(q_ranges), dtype=torch.bool, device=torch.cuda.current_device()
+            attn_type_map=torch.zeros(
+                len(q_ranges), dtype=torch.int32, device=torch.cuda.current_device()
             ),
             max_seqlen_q=q_ranges.max_seqlen,
             max_seqlen_k=xattn_k_ranges.max_seqlen,
@@ -200,7 +214,7 @@ class TestDistAttnRuntimeMgr(DistTestBase):
 
         total_o = dist_attn_runtime_mgr.undispatch_qo(local_o)
 
-        dffa.testing.assert_close(
+        magi_attention.testing.assert_close(
             total_o,
             total_o_ref,
         )
@@ -218,7 +232,7 @@ class TestDistAttnRuntimeMgr(DistTestBase):
             **total_xattn_attn_arg.to_ffa_args(is_bwd=False),
         )
 
-        dffa.testing.assert_close(
+        magi_attention.testing.assert_close(
             total_o,
             total_o_ref,
         )

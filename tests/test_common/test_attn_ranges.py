@@ -1,8 +1,22 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import unittest
 from unittest import TestCase
 
-from dffa.common.range import AttnRange
-from dffa.common.ranges import AttnRanges, is_valid_cu_seqlens
+from magi_attention.common.range import AttnRange
+from magi_attention.common.ranges import AttnRanges, is_valid_cu_seqlens
 
 
 class TestAttnRanges(TestCase):
@@ -501,6 +515,120 @@ class TestAttnRanges(TestCase):
 
         # ---------    invalid cu_seqlens w/o ending at seq_len     --------- #
         self.assertFalse(is_valid_cu_seqlens([0, 23, 49, 58, 89], 90))
+
+    def test_intersect_size(self):
+        # Test empty AttnRanges
+        empty_ranges = AttnRanges()
+        self.assertEqual(empty_ranges.intersect_size(), 0)
+
+        # Test single range case
+        single_range = AttnRanges.from_ranges([(5, 10)])
+        self.assertEqual(single_range.intersect_size(), 0)
+
+        # Test multiple non-overlapping ranges
+        non_overlap_ranges = AttnRanges.from_ranges([(5, 10), (15, 20), (25, 30)])
+        self.assertEqual(non_overlap_ranges.intersect_size(), 0)
+
+        # Test two partially overlapping ranges
+        two_overlap_ranges = AttnRanges.from_ranges([(5, 15), (10, 20)])
+        # 1 * [10, 15) = 5 = 5
+        self.assertEqual(
+            two_overlap_ranges.intersect_size(), 5
+        )  # Overlap region [10, 15)
+
+        # Test three overlapping ranges
+        three_overlap_ranges = AttnRanges.from_ranges([(5, 15), (10, 20), (12, 25)])
+        # 1 * [10, 15) + 1 * [12, 20) = 5 + 8 = 13
+        self.assertEqual(three_overlap_ranges.intersect_size(), 13)
+
+        three_overlap_ranges_same = AttnRanges.from_ranges([(5, 15), (5, 15), (5, 15)])
+        # 2 * [5, 15) = 10 + 10 = 20
+        self.assertEqual(three_overlap_ranges_same.intersect_size(), 20)
+
+        four_overlap_ranges_same = AttnRanges.from_ranges(
+            [(5, 15), (5, 15), (5, 15), (5, 15)]
+        )
+        # 3 * [5, 15) = 10 + 10 + 10 = 30
+        self.assertEqual(four_overlap_ranges_same.intersect_size(), 30)
+
+        # Test contained ranges
+        contained_ranges = AttnRanges.from_ranges([(5, 20), (8, 15)])
+        # 1 * [8, 15) = 7 = 7
+        self.assertEqual(contained_ranges.intersect_size(), 7)  # Overlap region [8, 15)
+
+        # Test multiple complex overlapping ranges
+        complex_ranges = AttnRanges.from_ranges(
+            [(0, 10), (5, 15), (8, 20), (18, 25), (22, 30)]
+        )
+        # 1 * [5, 10) + 1 * [8, 15) + 1 * [18, 20) + 1 * [22, 25) = 5 + 7 + 2 + 3 = 17
+        self.assertEqual(complex_ranges.intersect_size(), 17)
+
+        # Test adjacent but non-overlapping ranges
+        adjacent_ranges = AttnRanges.from_ranges([(5, 10), (10, 15), (15, 20)])
+        # 0 * [] = 0 = 0
+        self.assertEqual(adjacent_ranges.intersect_size(), 0)
+
+        # Test three ranges overlapping at a single point
+        point_overlap_ranges = AttnRanges.from_ranges([(0, 10), (5, 15), (5, 20)])
+        # 2 * [5, 10) + 1 * [5, 15) = 10 + 5 = 15
+        self.assertEqual(point_overlap_ranges.intersect_size(), 15)
+
+    def test_intersect_size_with(self):
+        # Test two empty ranges
+        empty_ranges1 = AttnRanges()
+        empty_ranges2 = AttnRanges()
+        self.assertEqual(empty_ranges1.intersect_size_with(empty_ranges2), 0)
+
+        # Test one empty range and one non-empty range
+        non_empty_ranges = AttnRanges.from_ranges([(5, 10)])
+        self.assertEqual(empty_ranges1.intersect_size_with(non_empty_ranges), 0)
+        self.assertEqual(non_empty_ranges.intersect_size_with(empty_ranges1), 0)
+
+        # Test two non-overlapping range sets
+        ranges1 = AttnRanges.from_ranges([(5, 10), (15, 20)])
+        ranges2 = AttnRanges.from_ranges([(25, 30), (35, 40)])
+        self.assertEqual(ranges1.intersect_size_with(ranges2), 0)
+
+        # Test partially overlapping range sets
+        ranges1 = AttnRanges.from_ranges([(5, 15), (25, 35)])
+        ranges2 = AttnRanges.from_ranges([(10, 20), (30, 40)])
+        # Overlap regions [10, 15) and [30, 35), total 5 + 5 = 10
+        self.assertEqual(ranges1.intersect_size_with(ranges2), 10)
+
+        # Test fully contained range sets
+        ranges1 = AttnRanges.from_ranges([(5, 25)])
+        ranges2 = AttnRanges.from_ranges([(10, 20)])
+        # Overlap region [10, 20), total 10
+        self.assertEqual(ranges1.intersect_size_with(ranges2), 10)
+        self.assertEqual(ranges2.intersect_size_with(ranges1), 10)
+
+        # Test multiple complex overlapping ranges
+        ranges1 = AttnRanges.from_ranges([(0, 10), (15, 25), (30, 40)])
+        ranges2 = AttnRanges.from_ranges([(5, 20), (22, 35)])
+        # Overlap regions [5, 10), [15, 20), [22, 25), and [30, 35), total 5 + 5 + 3 + 5 = 18
+        self.assertEqual(ranges1.intersect_size_with(ranges2), 18)
+
+        # Test identical range sets
+        ranges = AttnRanges.from_ranges([(5, 10), (15, 20)])
+        self.assertEqual(ranges.intersect_size_with(ranges), 10)
+
+        # Test adjacent but non-overlapping ranges
+        ranges1 = AttnRanges.from_ranges([(5, 10), (20, 25)])
+        ranges2 = AttnRanges.from_ranges([(10, 15), (15, 20)])
+        self.assertEqual(ranges1.intersect_size_with(ranges2), 0)
+
+    def test_union_size(self):
+        # Test empty ranges
+        empty_ranges1 = AttnRanges()
+        empty_ranges2 = AttnRanges()
+        self.assertEqual(empty_ranges1.union_size(), 0)
+        self.assertEqual(empty_ranges2.union_size(), 0)
+
+        # TODO(littsk): more tests
+
+    def test_union_size_with(self):
+        # TODO(littsk): more tests
+        ...
 
 
 if __name__ == "__main__":

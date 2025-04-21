@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import types
 from types import SimpleNamespace
 
@@ -6,23 +20,23 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from dffa.common import AttnRange, AttnRanges
-from dffa.common.enum import AttnMaskType
-from dffa.config import DispatchConfig, MinHeapDispatchAlg
-from dffa.meta import calc_dispatch_meta_from_qk_ranges
-from dffa.meta.container.slice import AttnSlice, MultiKAttnSlice
-from dffa.meta.solver.dist_attn_solver import (
+from magi_attention.common import AttnRange, AttnRanges
+from magi_attention.common.enum import AttnMaskType
+from magi_attention.config import DispatchConfig, MinHeapDispatchAlg
+from magi_attention.meta import calc_dispatch_meta_from_qk_ranges
+from magi_attention.meta.container.slice import AttnSlice, MultiKAttnSlice
+from magi_attention.meta.solver.dist_attn_solver import (
     DistAttnSolver,
     HostRankEntry,
     RemoteRankEntry,
 )
-from dffa.meta.solver.overlap_solver import (
+from magi_attention.meta.solver.overlap_solver import (
     OverlapConfig,
     OverlapSolver,
     UniformOverlapAlg,
 )
-from dffa.testing import parameterize
-from dffa.testing.dist_common import DistTestBase, with_comms
+from magi_attention.testing import parameterize
+from magi_attention.testing.dist_common import DistTestBase, with_comms
 
 WORLD_SIZE = 4
 SEED = 42

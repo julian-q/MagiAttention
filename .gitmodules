@@ -1,3 +1,3 @@
-[submodule "dffa/csrc/ffa/csrc/cutlass"]
-	path = dffa/csrc/ffa/csrc/cutlass
+[submodule "magi_attention/csrc/cutlass"]
+	path = magi_attention/csrc/cutlass
 	url = https://github.com/NVIDIA/cutlass.git

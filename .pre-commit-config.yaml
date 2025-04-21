@@ -1,10 +1,17 @@
 # Exclude all third-party libraries and patches files globally
 exclude: |
     (?x)^(
-        dffa/csrc/.+|
+        magi_attention/csrc/.+|
     )$
 repos:
 # Common hooks
+-   repo: local
+    hooks:
+    -   id: copyright_checker
+        name: copyright_checker
+        entry: python3 ./.codestyle/copyright.hook
+        language: system
+        files: \.(c|cc|cxx|cpp|cu|h|hpp|hxx|proto|py|sh)$
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
     hooks:

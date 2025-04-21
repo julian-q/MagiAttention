@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import itertools
 import os
 import platform
@@ -37,45 +51,16 @@ with open("./README.md", "r", encoding="utf-8") as fh:
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
-PACKAGE_NAME = "dffa"
+PACKAGE_NAME = "magi_attention"
 
 
 # FORCE_BUILD: Force a fresh build locally, instead of attempting to find prebuilt wheels
 # SKIP_CUDA_BUILD: Intended to allow CI to use a simple `python setup.py sdist` run to copy over raw files,
 # without any cuda compilation
-FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
-SKIP_CUDA_BUILD = os.getenv("FLASH_ATTENTION_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
+FORCE_BUILD = os.getenv("MAGI_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
+SKIP_CUDA_BUILD = os.getenv("MAGI_ATTENTION_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
-FORCE_CXX11_ABI = os.getenv("FLASH_ATTENTION_FORCE_CXX11_ABI", "FALSE") == "TRUE"
-DISABLE_BACKWARD = os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "FALSE") == "TRUE"
-DISABLE_SPLIT = os.getenv("FLASH_ATTENTION_DISABLE_SPLIT", "FALSE") == "TRUE"
-DISABLE_PAGEDKV = os.getenv("FLASH_ATTENTION_DISABLE_PAGEDKV", "FALSE") == "TRUE"
-DISABLE_APPENDKV = os.getenv("FLASH_ATTENTION_DISABLE_APPENDKV", "FALSE") == "TRUE"
-DISABLE_LOCAL = os.getenv("FLASH_ATTENTION_DISABLE_LOCAL", "FALSE") == "TRUE"
-DISABLE_SOFTCAP = os.getenv("FLASH_ATTENTION_DISABLE_SOFTCAP", "FALSE") == "TRUE"
-DISABLE_PACKGQA = os.getenv("FLASH_ATTENTION_DISABLE_PACKGQA", "FALSE") == "TRUE"
-DISABLE_FP16 = os.getenv("FLASH_ATTENTION_DISABLE_FP16", "FALSE") == "TRUE"
-DISABLE_FP8 = os.getenv("FLASH_ATTENTION_DISABLE_FP8", "FALSE") == "TRUE"
-DISABLE_VARLEN = os.getenv("FLASH_ATTENTION_DISABLE_VARLEN", "FALSE") == "TRUE"
-DISABLE_CLUSTER = os.getenv("FLASH_ATTENTION_DISABLE_CLUSTER", "FALSE") == "TRUE"
-DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
-DISABLE_HDIM96 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM96", "FALSE") == "TRUE"
-DISABLE_HDIM128 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM128", "FALSE") == "TRUE"
-DISABLE_HDIM192 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM192", "FALSE") == "TRUE"
-DISABLE_HDIM256 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM256", "FALSE") == "TRUE"
-DISABLE_SM8x = os.getenv("FLASH_ATTENTION_DISABLE_SM80", "FALSE") == "TRUE"
-ENABLE_VCOLMAJOR = os.getenv("FLASH_ATTENTION_ENABLE_VCOLMAJOR", "FALSE") == "TRUE"
-
-
-# custom flags
-DISABLE_SM8x = True
-DISABLE_HDIM256 = True
-DISABLE_HDIM96 = True
-DISABLE_FP8 = True
-DISABLE_PACKGQA = True
-DISABLE_PAGEDKV = True
-DISABLE_APPENDKV = True
-DISABLE_SPLIT = True
+FORCE_CXX11_ABI = os.getenv("MAGI_ATTENTION_FORCE_CXX11_ABI", "FALSE") == "TRUE"
 
 
 def _write_ninja_file(
@@ -351,25 +336,8 @@ def check_env_flag(name: str, default: str = "") -> bool:
 
 
 # Copied from https://github.com/triton-lang/triton/blob/main/python/setup.py
-def is_offline_build() -> bool:
-    """
-    Downstream projects and distributions which bootstrap their own dependencies from scratch
-    and run builds in offline sandboxes
-    may set `FLASH_ATTENTION_OFFLINE_BUILD` in the build environment to prevent any attempts at downloading
-    pinned dependencies from the internet or at using dependencies vendored in-tree.
-
-    Dependencies must be defined using respective search paths (cf. `syspath_var_name` in `Package`).
-    Missing dependencies lead to an early abortion.
-    Dependencies' compatibility is not verified.
-
-    Note that this flag isn't tested by the CI and does not provide any guarantees.
-    """
-    return check_env_flag("FLASH_ATTENTION_OFFLINE_BUILD", "")
-
-
-# Copied from https://github.com/triton-lang/triton/blob/main/python/setup.py
-def get_flashattn_cache_path():
-    user_home = os.getenv("FLASH_ATTENTION_HOME")
+def get_magi_attention_cache_path():
+    user_home = os.getenv("MAGI_ATTENTION_HOME")
     if not user_home:
         user_home = (
             os.getenv("HOME")
@@ -379,7 +347,7 @@ def get_flashattn_cache_path():
         )
     if not user_home:
         raise RuntimeError("Could not find user home directory")
-    return os.path.join(user_home, ".flashattn")
+    return os.path.join(user_home, ".magi_attention")
 
 
 def open_url(url):
@@ -395,9 +363,7 @@ def open_url(url):
 
 
 def download_and_copy(name, src_func, dst_path, version, url_func):
-    if is_offline_build():
-        return
-    flashattn_cache_path = get_flashattn_cache_path()
+    magi_attention_cache_path = get_magi_attention_cache_path()
     base_dir = os.path.dirname(__file__)
     system = platform.system()
     arch = platform.machine()
@@ -406,7 +372,7 @@ def download_and_copy(name, src_func, dst_path, version, url_func):
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(
-        flashattn_cache_path, "nvidia", name
+        magi_attention_cache_path, "nvidia", name
     )  # path to cache the download
     dst_path = os.path.join(
         base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path
@@ -438,9 +404,6 @@ exe_extension = sysconfig.get_config_var("EXE")
 cmdclass = {}  # type: ignore[var-annotated]
 ext_modules = []
 
-# We want this even if SKIP_CUDA_BUILD because when we run python setup.py sdist we want the .hpp
-# files included in the source distribution, in case the user compiles from source.
-subprocess.run(["git", "submodule", "update", "--init", "../csrc/cutlass"])
 
 if not SKIP_CUDA_BUILD:
     print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
@@ -450,7 +413,7 @@ if not SKIP_CUDA_BUILD:
     check_if_cuda_home_none(PACKAGE_NAME)
     _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
     if bare_metal_version < Version("12.3"):
-        raise RuntimeError("dffa is only supported on CUDA 12.3 and above")
+        raise RuntimeError("magi_attention is only supported on CUDA 12.3 and above")
 
     # ptxas 12.8 gives the best perf currently
     # We want to use the nvcc front end from 12.6 however, since if we use nvcc 12.8
@@ -499,9 +462,29 @@ if not SKIP_CUDA_BUILD:
     if FORCE_CXX11_ABI:
         torch._C._GLIBCXX_USE_CXX11_ABI = True
     repo_dir = Path(this_dir)
-    cutlass_dir = repo_dir / "dffa" / "csrc" / "ffa" / "csrc" / "cutlass"
-    ffa_dir_abs = repo_dir / "dffa" / "csrc" / "ffa" / "hopper"
-    ffa_dir_rel = "dffa/csrc/ffa/hopper"
+    cutlass_dir = repo_dir / "magi_attention" / "csrc" / "cutlass"
+    ffa_dir_abs = repo_dir / "magi_attention" / "csrc" / "flexible_flash_attention"
+    ffa_dir_rel = "magi_attention/csrc/flexible_flash_attention"
+
+    # custom flags
+    DISABLE_SM8x = True
+    DISABLE_LOCAL = True
+    DISABLE_HDIM256 = True
+    DISABLE_HDIM96 = True
+    DISABLE_FP8 = True
+    DISABLE_PACKGQA = True
+    DISABLE_PAGEDKV = True
+    DISABLE_APPENDKV = True
+    DISABLE_SPLIT = True
+    DISABLE_FP16 = False
+    DISABLE_BACKWARD = False
+    DISABLE_SOFTCAP = False
+    DISABLE_VARLEN = False
+    DISABLE_CLUSTER = False
+    DISABLE_HDIM64 = False
+    DISABLE_HDIM128 = False
+    DISABLE_HDIM192 = False
+    ENABLE_VCOLMAJOR = False
 
     feature_args = (
         []
@@ -628,20 +611,19 @@ if not SKIP_CUDA_BUILD:
 
 
 setup(
-    name="dffa",
-    # version="0.0.1",
+    name="magi_attention",
+    version="1.0.0",
     packages=find_packages(
         exclude=(
             "build",
-            "csrc",
-            "include",
             "tests",
             "dist",
             "docs",
-            "benchmarks",
+            "tools",
+            "assets",
         )
     ),
-    py_modules=["dffa"],
+    py_modules=["magi_attention"],
     description="A super fast distributed attention solver",
     long_description=long_description,
     long_description_content_type="text/markdown",

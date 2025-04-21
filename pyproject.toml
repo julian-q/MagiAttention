@@ -1,14 +1,9 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=6.2"]
-build-backend = "build_helper"
-backend-path = ["tools/"]
-
 [project]
-name = "dffa"
+name = "magi_attention"
 dynamic = ["version"]
-description = "A Super fast distributed attention solver"
+description = "A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training"
 authors = [
-  {name = "littsk", email = "zeweitao630@gmail.com"},
+  {name = "littsk", email = "zeweitao@sand.ai"},
   {name = "Strivin", email = "hyp@smail.nju.edu.cn"}
 ]
 license = {text = "Apache-2.0"}
@@ -20,29 +15,13 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-
 [project.urls]
-"Homepage" = "https://github.com/world-sim-dev/dist-flex-flash-attention"
-"Bug Tracker" = "https://github.com/world-sim-dev/dist-flex-flash-attention/issues"
-
-# 关键修改：显式包含所有子包
-[tool.setuptools]
-# 包含非 Python 文件（如 .h 文件）
-include-package-data = true
-
-# 配置 find 的行为
-[tool.setuptools.packages.find]
-where = ["."]  # 从当前目录开始递归查找
-include = ["dffa*", "dffa.*"]  # 强制包含所有 dffa 子包
-
-# 如果有需要包含的非 Python 文件（例如 csrc/ 中的头文件）
-[tool.setuptools.package-data]
-"dffa.csrc" = ["*.h"]  # 示例：包含 csrc 目录下的所有 .h 文件
-
-# setuptools_scm 配置
-[tool.setuptools_scm]
-write_to = "dffa/version.py"
-fallback_version = "1.2.0"
+"Homepage" = "https://github.com/SandAI-org/MagiAttention/"
+"Bug Tracker" = "https://github.com/SandAI-org/MagiAttention/issues"
 
 [tool.isort]
 profile = "black"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "build"]
+build-backend = "setuptools.build_meta"

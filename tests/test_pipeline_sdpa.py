@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import random
 from typing import Any
@@ -7,23 +21,28 @@ import torch.distributed as dist
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-import dffa
-import dffa.testing
-from dffa import init_dist_attn_runtime_mgr
-from dffa.common.enum import AttnMaskType, AttnOverlapMode
-from dffa.common.ranges import AttnRanges
-from dffa.config import (
+import magi_attention
+import magi_attention.testing
+from magi_attention import init_dist_attn_runtime_mgr
+from magi_attention.common.enum import AttnMaskType, AttnOverlapMode
+from magi_attention.common.ranges import AttnRanges
+from magi_attention.config import (
     DispatchConfig,
     DistAttnConfig,
     MinHeapDispatchAlg,
     OverlapConfig,
     UniformOverlapAlg,
 )
-from dffa.dist_attn_runtime_mgr import DistAttnRuntimeMgr
-from dffa.testing import parameterize
-from dffa.testing.dist_common import DistTestBase, with_comms
-from dffa.testing.precision import EPSILON, torch_attn_ref
-from dffa.utils import get_attn_mask_from_ranges, is_list_value_all, str2seed, sync_rng
+from magi_attention.dist_attn_runtime_mgr import DistAttnRuntimeMgr
+from magi_attention.testing import parameterize
+from magi_attention.testing.dist_common import DistTestBase, with_comms
+from magi_attention.testing.precision import EPSILON, torch_attn_ref
+from magi_attention.utils import (
+    get_attn_mask_from_ranges,
+    is_list_value_all,
+    str2seed,
+    sync_rng,
+)
 
 NAME = "name"
 SKIP_WORLD_SIZE = "skip_world_size"
@@ -85,7 +104,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
         ]
 
         # NOTE: test using sdpa backend with fp64 dtype support
-        os.environ["DFFA_SDPA_BACKEND"] = "1"
+        os.environ["MAGI_ATTENTION_SDPA_BACKEND"] = "1"
 
     @property
     def process_group(self):
@@ -538,7 +557,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
 
         # NOTE: test pipeline using sdpa does not need profile mode
         # thus we always enable sanity check mode
-        assert dffa.is_sanity_check_enable()
+        assert magi_attention.is_sanity_check_enable()
 
         # -----    construct test case name   ---- #
 
@@ -565,7 +584,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
                 is_causal_mapping = [
                     random.choice([True, False]) for _ in is_causal_mapping
                 ]
-        if not dffa.is_causal_mask_enable():
+        if not magi_attention.is_causal_mask_enable():
             # NOTE: skip any test case with causal mask when the feature is disabled
             if not is_list_value_all(is_causal_mapping, False):
                 return
@@ -748,7 +767,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
 
         # -----   assert close for fwd out   ---- #
 
-        dffa.testing.assert_close(
+        magi_attention.testing.assert_close(
             total_out,
             total_out_ref_high_precision,
             atol=o_atol,
@@ -758,7 +777,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
 
         # -----   assert close for bwd dq   ---- #
 
-        dffa.testing.assert_close(
+        magi_attention.testing.assert_close(
             grad_total_q,
             grad_total_q_ref_high_precision,
             atol=dq_atol,
@@ -768,7 +787,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
 
         # -----   assert close for bwd dk   ---- #
 
-        dffa.testing.assert_close(
+        magi_attention.testing.assert_close(
             grad_total_k,
             grad_total_k_ref_high_precision,
             atol=dk_atol,
@@ -778,7 +797,7 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
 
         # -----   assert close for bwd dv   ---- #
 
-        dffa.testing.assert_close(
+        magi_attention.testing.assert_close(
             grad_total_v,
             grad_total_v_ref_high_precision,
             atol=dv_atol,

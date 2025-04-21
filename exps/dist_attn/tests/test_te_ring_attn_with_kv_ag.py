@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import random
 
 import torch
@@ -9,9 +23,9 @@ from torch.nn.functional import scaled_dot_product_attention
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import run_tests
 
-from dffa.common.enum import AttnMaskType
-from dffa.common.ranges import AttnRanges
-from dffa.testing.dist_common import DistTestBase, with_comms
+from magi_attention.common.enum import AttnMaskType
+from magi_attention.common.ranges import AttnRanges
+from magi_attention.testing.dist_common import DistTestBase, with_comms
 
 # isort: split
 from exps.dist_attn.baselines.ring_attn import TERingAttnWithKVAG

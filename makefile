@@ -31,10 +31,10 @@ coverage:
 clean:
 	rm -rf __pycache__
 	rm -rf tests/__pycache__
-	rm -rf dffa/__pycache__
-	rm -rf dffa/version.py
+	rm -rf magi_attention/__pycache__
+	rm -rf magi_attention/version.py
 	rm -rf build
 	rm -rf dist
-	rm -rf dffa.egg-info
-	rm -rf src/dffa.egg-info
-	pip uninstall -y dffa
+	rm -rf magi_attention.egg-info
+	rm -rf src/magi_attention.egg-info
+	pip uninstall -y magi_attention
