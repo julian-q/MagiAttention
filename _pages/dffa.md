@@ -300,7 +300,7 @@ Results are reported in the following figures.
 </div>
 
 <div class="l-middle">
-  <img src="zeus/assets/img/magiattn/ffa_exp/attn with sw causal mask/perf_report_all.png" width="100%">
+  <img src="assets/img/magiattn/ffa_exp/attn with sw causal mask/perf_report_all.png" width="100%">
   <div class="caption left">
     Benchmarking FFA's performance and flexibility against other leading attention kernels for sliding-window causal mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration.)
   </div>
