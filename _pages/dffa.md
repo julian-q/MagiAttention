@@ -306,6 +306,13 @@ Results are reported in the following figures.
   </div>
 </div>
 
+<div class="l-middle">
+  <img src="assets/img/magiattn/ffa_exp/attn with varlen block causal mask/perf_report_all.png" width="100%">
+  <div class="caption left">
+    Benchmarking FFA's performance and flexibility against other leading attention kernels for varlen block causal mask scenarios. (Note that: the $\mathbf{E}$ symbol indicates the corresponding distributed attention implementation raises <em>Cuda Out of Memory</em> error in that specific configuration, while the $\mathbf{X}$ symbol indicates the corresponding distributed attention implementation is not supported in that specific configuration.)
+  </div>
+</div>
+
 
 
 ### Module-Level
