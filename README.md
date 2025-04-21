@@ -326,13 +326,6 @@ As demonstrated, MagiAttention exhibits linear scalability as the context length
 We welcome and value any contributions and collaborations. Please check out [CONTRIBUTING.md](./CONTRIBUTING.md) for how to get involved.
 
 
-## Contributors
-
-<a href="https://github.com/SandAI-org/MagiAttention/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=SandAI-org/MagiAttention"/>
-</a>
-
-
 ## License ⚖️
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
