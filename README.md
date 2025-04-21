@@ -114,6 +114,7 @@ You can refer to the magi_attention/api/magi_attn_interface.py for more informat
 <details>
 <summary>Basic Usage</summary>
 
+flash_attn_varlen like interface(magi_attn_varlen_dispatch):
 ```python
 from magi_attention.api import magi_attn_flex_dispatch, undispatch, calc_attn, squash_batch_dim, full_attention_to_varlen_attention, compute_pad_size   # func tools and interface
 
@@ -140,75 +141,114 @@ cu_seqlens_q, cu_seqlens_k = full_attention_to_varlen_attention(
 # pad input seqlen for better performance
 pad_size, _ = compute_pad_size(x, cp_size, head_dim)
 
-# get q_ranges and k_ranges from cu_seqlens
-q_ranges: AttnRanges = AttnRanges.from_ranges(
-        torch.stack([cu_seqlens_q[:-1], cu_seqlens_q[1:]], dim=1).tolist()
-    )
-k_ranges: AttnRanges = AttnRanges.from_ranges(
-        torch.stack([cu_seqlens_q[:-1], cu_seqlens_q[1:]], dim=1).tolist()
-    )
-
-total_seqlen_q: int = int(cu_seqlens_q[-1])
-total_seqlen_k: int = int(cu_seqlens_k[-1])
+total_seqlen_q: int = batchsize * seqlen
+total_seqlen_k: int = batchsize * seqlen
 
 # ---   magi_attention dispatch   --- #
 
 # dispatch global input tensor to each rank and get the runtime_key
-local_x, dist_attn_runtime_key = magi_attn_flex_dispatch(    # local_x with shape ( bs * seqlen / cp_size, h)
-        x = x   # seqlen must be at dim0
-        q_ranges=q_ranges
-        k_ranges=k_ranges,
-        attn_mask_type=AttnMaskType.FULL,
-        total_seqlen_q=total_seqlen_q,
-        total_seqlen_k=total_seqlen_k,
-        pad_size=pad_size,
-        head_dim=head_dim,
-        cp_group=cp_group,
-        is_same_source=True,
-        is_q_permutable=True,
-        is_k_permutable=True,
-        dist_attn_config=DistAttnConfig(
-                 dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
-                 overlap_config=OverlapConfig(
-                 enable=True,
-                 mode=AttnOverlapMode.STATIC,
-                 degree=2,
-                 min_chunk_size=512,
-                 max_num_chunks=64,
-                 alg=OverlapAlgType.UNIFORM,
-                ),
-            ),
-        )
-
-"""
-you can also use the flash-attn varlen like interface:
-
-local_x, dist_attn_runtime_key = dist_flash_attn_varlen_dispatch(
+local_x, magi_attn_runtime_key = magi_attn_varlen_dispatch(  # local_x with shape ((total_seq + pad_size) / cp_size), h)
         x,
         cu_seqlens_q,
         cu_seqlens_k,
         head_dim=head_dim,
         pad_size=pad_size,
         cp_group=cp_group,
-        causal=LlamaConfig().is_casual,
-        dist_attn_config=dist_attn_config,
-    )
-
-"""
+        causal=False,
+        dist_attn_config=DistAttnConfig(
+                dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
+                overlap_config=OverlapConfig(
+                enable=True,
+                mode=AttnOverlapMode.STATIC,
+                degree=2,
+                min_chunk_size=512,
+                max_num_chunks=64,
+                alg=OverlapAlgType.UNIFORM,
+                ),
+            ),
+        )
 
 ......
-
 
 # ---  magi_attention calculation and undispatch  --- #
 # do q k v projection
 local_q, local_k, local_v = q_project(local_x), k_project(local_x), v_project(local_x)  # q, k, v with shape (bs * seqlen / cp_size, nh, hd)
 
 # Do local attention computation with runtime key
-local_out, _ = calc_attn(local_q, local_k, local_v, dist_attn_runtime_key) # local out with shape (bs * seqlen / cp_size, h)
+local_out, _ = calc_attn(local_q, local_k, local_v, magi_attn_runtime_key) # local out with shape (bs * seqlen / cp_size, h)
 
 # Gather local attention results to global result with runtime key
-total_out = undispatch(local_out, dist_attn_runtime_key)   # total out with shape (bs * seqlen, h)
+total_out = undispatch(local_out, magi_attn_runtime_key)   # total out with shape (bs * seqlen, h)
 ```
+
+magi_attn_flex_dispatch(more flexible):
+```python
+
+x = torch.randn(
+          seqlen,
+          h,
+          device=device,
+          dtype=dtype,
+          requires_grad = True
+      )
+# block mask
+q_ranges = AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 960],
+                    ]
+                ),
+k_ranges = AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [0, 256],
+                        [0, 384],
+                        [0, 512],
+                        [512, 640],
+                        [512, 768],
+                        [768, 960],
+                    ]
+                ),
+
+total_seqlen_q = 960
+total_seqlen_k = 960
+attn_mask_type = [AttnMaskType.FULL] * 7
+pad_size, _ = compute_pad_size(total_seqlen_q, cp_size, head_dim)
+
+local_x, magi_attn_runtime_key = magi_attn_flex_dispatch( # local_x with shape (total_seqlen_q + pad_size) / cp_size, h)
+                x,
+                q_ranges=q_ranges,
+                k_ranges=k_ranges,
+                attn_mask_type=attn_mask_type,
+                total_seqlen_q=total_seqlen_q,
+                total_seqlen_k=total_seqlen_k,
+                head_dim=head_dim,
+                pad_size=pad_size,
+                cp_group=self.nccl_group,
+                is_same_source=True,
+                is_q_permutable=True,
+                is_k_permutable=True,
+                dist_attn_config=dist_attn_config,
+          )
+
+......
+
+# ---  magi_attention calculation and undispatch  --- #
+# do q k v projection
+local_q, local_k, local_v = q_project(local_x), k_project(local_x), v_project(local_x)  # q, k, v with shape (s, nh, hd)
+
+# Do local attention computation with runtime key
+local_out, _ = calc_attn(local_q, local_k, local_v, magi_attn_runtime_key) # local out with shape (s, h)
+
+# Gather local attention results and unpad to global result with runtime key
+total_out = undispatch(local_out, magi_attn_runtime_key)   # total out with shape (totoal_seqlen_q, h)
+```
+
 </details>
 
 

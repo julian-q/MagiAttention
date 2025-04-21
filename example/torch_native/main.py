@@ -25,14 +25,13 @@ from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, Partial, Shard, distribute_tensor
 from torch.optim.lr_scheduler import LinearLR
 
-from magi_attention.api import magi_attn_flex_dispatch, undispatch
+from magi_attention.api import magi_attn_varlen_dispatch, undispatch
 from magi_attention.api.functools import (
     compute_pad_size,
     full_attention_to_varlen_attention,
     squash_batch_dim,
 )
-from magi_attention.common import AttnRanges
-from magi_attention.common.enum import AttnMaskType, AttnOverlapMode
+from magi_attention.common.enum import AttnOverlapMode
 from magi_attention.config import (
     DispatchConfig,
     DistAttnConfig,
@@ -265,41 +264,7 @@ def prepare_magi_attention(input, cu_seqlens_q, cu_seqlens_k, pad_size, cp_group
         deterministic=False,
     )
 
-    # prepare qk ranges(from list)
-    q_ranges: AttnRanges = AttnRanges.from_ranges(
-        torch.stack([cu_seqlens_q[:-1], cu_seqlens_q[1:]], dim=1).tolist()
-    )
-    k_ranges: AttnRanges = AttnRanges.from_ranges(
-        torch.stack([cu_seqlens_q[:-1], cu_seqlens_q[1:]], dim=1).tolist()
-    )
-
-    total_seqlen_q: int = int(cu_seqlens_q[-1])
-    total_seqlen_k: int = int(cu_seqlens_k[-1])
-
-    # we will support more type of attn mask for magi_attention in the future
-    attn_mask_type = [
-        AttnMaskType.CAUSAL if LlamaConfig().is_casual else AttnMaskType.FULL
-    ] * len(q_ranges)
-
-    # ---   pad input data, get dist_attn_runtime_key and dispatch input data along the seq_len   --- #
-    x_padded, dist_attn_runtime_key = magi_attn_flex_dispatch(
-        input,
-        q_ranges,
-        k_ranges,
-        attn_mask_type,
-        total_seqlen_q,
-        total_seqlen_k,
-        head_dim=LlamaConfig().head_dim,
-        pad_size=pad_size,
-        cp_group=cp_group,
-        is_same_source=True,
-        is_q_permutable=True,
-        is_k_permutable=True,
-        dist_attn_config=dist_attn_config,
-    )
-
-    # you can also use fa-like varlen dispatch interface directly
-    """
+    # you can also use fa_varlen-like varlen dispatch interface directly
     x_padded, dist_attn_runtime_key = magi_attn_varlen_dispatch(
         input,
         cu_seqlens_q,
@@ -310,7 +275,6 @@ def prepare_magi_attention(input, cu_seqlens_q, cu_seqlens_k, pad_size, cp_group
         causal=LlamaConfig().is_casual,
         dist_attn_config=dist_attn_config,
     )
-    """
 
     return x_padded, dist_attn_runtime_key
 
