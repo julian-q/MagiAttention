@@ -140,6 +140,22 @@ def is_list_value_all(
     return all(x == val for x in _list)
 
 
+def is_list_value_any(
+    _list: list[Any],
+    val: Any = None,
+    just_same: bool = False,
+    allow_empty: bool = False,
+) -> bool:
+    if len(_list) == 0:
+        return allow_empty
+
+    if just_same:
+        assert val is None, "val should be None when just_same is True"
+        val = _list[0]
+
+    return any(x == val for x in _list)
+
+
 def is_list_type_all(
     _list: list[Any],
     _type: Any = None,

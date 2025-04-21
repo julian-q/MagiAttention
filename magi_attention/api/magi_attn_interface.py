@@ -24,6 +24,7 @@ from magi_attention.meta import (
     calc_attn_meta_from_dispatch_meta,
     calc_dispatch_meta_from_qk_ranges,
 )
+from magi_attention.utils import is_list_value_any, wrap_to_list
 
 from .functools import FixedLenDict, compute_pad_size, pad_at_dim, unpad_at_dim
 
@@ -324,8 +325,23 @@ def magi_attn_flex_key(
     # Validate head_dim
     if head_dim % 8 != 0:
         raise ValueError(f"head_dim ({head_dim}) must be divisible by 8")
-    if head_dim > 256:
-        raise ValueError(f"head_dim ({head_dim}) must be ≤ 256")
+    if head_dim > 192:
+        raise ValueError(f"head_dim ({head_dim}) must be ≤ 192")
+    if not q_ranges.is_non_overlap():
+        raise ValueError(
+            f"q_ranges ({q_ranges}) should not have overlap for now. This feature is coming in a near future release."
+        )
+
+    attn_mask_type = wrap_to_list(attn_mask_type)
+
+    if is_list_value_any(attn_mask_type, AttnMaskType.BICAUSAL):
+        raise ValueError(
+            "attn_mask_type: BICAUSAL is not supported for now. This feature is coming in a near future releas."
+        )
+    if is_list_value_any(attn_mask_type, AttnMaskType.INVCASUAL):
+        raise ValueError(
+            "attn_mask_type: INVCASUAL is not supported for now. This feature is coming in a near future release."
+        )
 
     key = DistAttnRuntimeKey(
         cp_group,
@@ -347,10 +363,8 @@ def magi_attn_flex_key(
         x = pad_at_dim(x, 0, pad_size)
         q_range.append(AttnRange(start=total_seqlen_q, end=total_seqlen_q + pad_size))
         k_range.append(AttnRange(start=0, end=0))
-        if isinstance(attn_mask_type, list):
-            attn_mask_type.append(AttnMaskType.FULL)
-        else:
-            attn_mask_type = [attn_mask_type, AttnMaskType.FULL]
+        attn_mask_type.append(AttnMaskType.FULL)
+
         total_seqlen_q += pad_size
         total_seqlen_k += pad_size
 
