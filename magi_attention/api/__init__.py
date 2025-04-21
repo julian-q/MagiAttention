@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from magi_attention.functional import flex_flash_attn_func
+
 from .functools import (
     compute_pad_size,
     from_mask,
@@ -37,6 +39,7 @@ __all__ = [
     "magi_attn_varlen_dispatch",
     "magi_attn_varlen_key",
     "undispatch",
+    "flex_flash_attn_func",
     "get_position_ids",
     "compute_pad_size",
     "squash_batch_dim",
