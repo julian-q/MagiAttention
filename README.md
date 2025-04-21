@@ -1,7 +1,7 @@
 # MagiAttention
 
 <p align="center">
-    <a href="?"><img alt="paper" src="https://img.shields.io/badge/paper-arxiv:-blue"></a>
+    <a href="https://static.magi.world/static/files/MAGI_1.pdf"><img alt="paper" src="https://img.shields.io/badge/paper-magi_1-blue"></a>
     <a href="https://SandAI-org.github.io/MagiAttention/"><img alt="blog" src="https://img.shields.io/badge/blog-magiattention-purple"></a>
     <a href="https://github.com/SandAI-org/MagiAttention/releases"><img alt="license" src="https://img.shields.io/badge/release-v1.0.0-green"></a>
     <a href="https://github.com/SandAI-org/MagiAttention/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache2.0-orange"></a>
@@ -357,6 +357,6 @@ We are grateful to the contributors listed below for their valuable contribution
 
 <div align="center">
   <a href="https://star-history.com/#SandAI-org/MagiAttention&Date">
-    <img src="https://api.star-history.com/svg?repos=SandAI-org/MagiAttention&type=Date" alt="Star History Chart" style="max-width: 70%; height: auto;"/>
+    <img src="https://api.star-history.com/svg?repos=SandAI-org/MagiAttention&type=Date" alt="Star History Chart" style="max-width: 60%; height: auto;"/>
   </a>
 </div>
