@@ -2,7 +2,7 @@
 layout: distill
 permalink: /
 title: MagiAttention
-description: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training
+description: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training
 date: 2025-04-21
 featured: true
 pretty_table: true
@@ -93,7 +93,7 @@ _styles: >
 
 Training large-scale models for video generation presents two major challenges: (1) The extremely long context length of video tokens, which reaching up to 4 million during training, results in prohibitive computational and memory overhead. (2) The combination of block-causal attention and Packing-and-Padding (PnP) introduces highly complex attention mask patterns. 
 
-To address these challenges, we propose [MagiAttention](https://github.com/SandAI-org/MagiAttention), which aims to support a wide variety of attention mask types with **kernel-level flexibility**, while achieving **linear scalability** with respect to context-parallel (CP) size across a broad range of scenarios, particularly suitable for training tasks involving <u><em>ultra-long, heterogeneous data</em></u> training like video-generation for [Magi-1](https://github.com/SandAI-org/Magi-1).
+To address these challenges, we propose [MagiAttention](https://github.com/SandAI-org/MagiAttention), which aims to support a wide variety of attention mask types with **kernel-level flexibility**, while achieving **linear scalability** with respect to context-parallel (CP) size across a broad range of scenarios, particularly suitable for training tasks involving <u><em>ultra-long, heterogeneous mask</em></u> training like video-generation for [Magi-1](https://github.com/SandAI-org/Magi-1).
 
 
 ## Introduction
@@ -249,7 +249,7 @@ To adaptively control overlap granularity, we further introduce a tunable hyperp
 
 ### Kernel-Level
 
-To demonstrate FFA kernels' state-of-the-art performance and flexibility in handling ultra-long, heterogeneous data training, we measure the computing power (in $\texttt{TFLOPs/s}$) on Hopper GPUs for both forward and backward passes of prevalent attention kernels across standard and irregular mask patterns.
+To demonstrate FFA kernels' state-of-the-art performance and flexibility in handling ultra-long, heterogeneous mask training, we measure the throughput (in $\texttt{TFLOPs/s}$) on Hopper GPUs for both forward and backward passes of prevalent attention kernels across standard and irregular mask patterns.
 
 | settings              | value                                                                          |
 |-----------------------|-----------------------------------------------------------------------------|
@@ -304,9 +304,9 @@ Results are reported in the following figures.
 
 ### Module-Level
 
-To validate the scalability of MagiAttention, we assess the computing power (in $\texttt{TFLOPs/s}$) of the attention module propagation as the sequence length and parallel size increases for both forward and backward passes across various mask patterns, and compare it with several state-of-the-art CP strategies.
+To validate the scalability of MagiAttention, we assess the throughput (in $\texttt{TFLOPs/s}$) of the attention module propagation as the sequence length and parallel size increases for both forward and backward passes across various mask patterns, and compare it with several state-of-the-art CP strategies.
 
-To validate the scalability of MagiAttention, we assess the per-GPU computing power (in $\texttt{TFLOPs/s/GPU}$) of the attention module during both forward and backward propagation, as the sequence length and parallel size increase. This assessment is compared against common CP strategies including Ring-Attention<d-cite key="liu2023ringattentionblockwisetransformers"></d-cite> and Ulysses<d-cite key="jacobs2023deepspeed"></d-cite>. Due to the complexity of supporting irregular masks for baselines, our experiments are limited to the full mask and varlen full mask scenarios. And the distribution of variable sequence lengths still follow the one in [Kernel-level Experiments](#kernel-level).
+To validate the scalability of MagiAttention, we assess the per-GPU throughput (in $\texttt{TFLOPs/s/GPU}$) of the attention module during both forward and backward propagation, as the sequence length and parallel size increase. This assessment is compared against common CP strategies including Ring-Attention<d-cite key="liu2023ringattentionblockwisetransformers"></d-cite> and Ulysses<d-cite key="jacobs2023deepspeed"></d-cite>. Due to the complexity of supporting irregular masks for baselines, our experiments are limited to the full mask and varlen full mask scenarios. And the distribution of variable sequence lengths still follow the one in [Kernel-level Experiments](#kernel-level).
 
 The experiments are conducted on a large-scale productive GPU cluster<d-footnote>Due to business and confidentiality reasons, specific details about the productive cluster, such as the number and type of GPUs, are withheld.</d-footnote>. We scale the total sequence length $\textit{seqlen}$, the context-parallel size $\textit{cp_size}$, and the node size $\textit{nnodes}$ together from $(\textit{seqlen}:64k, \textit{cp_size}:1, nnodes:1)$, $(\textit{seqlen}:128k, \textit{cp_size}:2, nnodes:2)$, ..., to $(\textit{seqlen}:3072k\;(3M), \textit{cp_size}:48, nnodes:48)$. 
 
@@ -371,7 +371,7 @@ If you use MagiAttention in your research, please cite:
 
 ```bibtex
 @misc{magiattention2025,
-  title={MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Data Training},
+  title={MagiAttention: A Distributed Attention Towards Linear Scalability for Ultra-Long Context, Heterogeneous Mask Training},
   author={Zewei, Tao and Yunpeng, Huang},
   year={2025},
   howpublished={\url{https://github.com/SandAI-org/MagiAttention/}},
