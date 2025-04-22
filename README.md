@@ -317,7 +317,7 @@ total_out = undispatch(local_out, magi_attn_runtime_key)   # total out with shap
 
 ### Examples to integrate with FSDP2
 
-We provide an example of how to intergrate magi_attention with fsdp2 in `example/torch_native`. You can use `bash run.sh` to run the example.
+We provide an example of how to integrate magi_attention with fsdp2 in `example/torch_native`. You can use `bash run.sh` to run the example.
 
 In this example, we build a llama-1b model and apply fsdp2 with magi_attention as the parallelism strategy.
 
