@@ -107,12 +107,75 @@ For implementation details, more experimental results and future works, please v
 
 ### Basic Usage
 
-We provide an example(pseudo-code) of how to use magi_attention(context parallel only) to accelerate distribute attention calculation.
+We provide an example(pseudo-code) of how to use flex_flash_attention(kernel) and magi_attention(context parallel only) to accelerate local/distribute attention calculation.
 
 You can refer to the magi_attention/api/magi_attn_interface.py for more information.
 
 <details>
 <summary>Basic Usage</summary>
+
+flex_flash_attention(kernel):
+```python
+bsz=4
+seqlen=128
+x = torch.randn(    # input x with shape ((bzs, seqlen), h)
+            bsz * seqlen,
+            h,   # hidden_size
+            device=device,
+            dtype=dtype,
+            requires_grad = True
+        )
+q_ranges=AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                    ]
+                ),
+k_ranges=AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [0, 256],
+                        [0, 384],
+                        [0, 512],
+                    ]
+                ),
+max_seqlen_q=512
+max_seqlen_k=512
+attn_type_map=torch.tensor([0， 1， 2, 3], device=device)  # we support different mask type for different qk ranges.
+'''
+attn type map:
+0: full attention
+1: causal attention
+2: inverse causal attention
+3: bidirectional causal attention
+for more information about attn mask type, please refer to our blog:
+https://sandai-org.github.io/MagiAttention/
+'''
+
+q, k, v = q_proj(x), k_proj(x), v_proj(x)  # q with shape(s, nheads, nd), k with shape(s, nheads_kv, nd), v with shape(s, nheads_kv, nd)
+
+# do flex_flash_attn_func forward.
+out, _ = flex_flash_attn_func(
+        q,
+        k,
+        v,
+        q_ranges,
+        k_ranges,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
+        attn_type_map=attn_type_map,
+        disable_fwd_atomic_reduction=True,
+    )
+
+# generate g with same shape as out
+g = torch.randn(bsz * seqlen_q, nheads, nd, device=device, dtype=dtype)
+# do backward
+out.backward(g)
+
+```
+
 
 flash_attn_varlen like interface(magi_attn_varlen_dispatch):
 ```python
