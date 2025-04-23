@@ -1,3 +1,17 @@
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import absolute_import, print_function, unicode_literals
 
 import argparse
@@ -26,7 +40,7 @@ def _generate_copyright(comment_mark):
     copyright = COPYRIGHT.split(os.linesep)
     header = copyright[0].rstrip()
 
-    p = re.search("(\d{4})", header).group(0)
+    p = re.search("(\d{4})", header).group(0)  # noqa: W605
     now = datetime.datetime.now()
 
     header = header.replace(p, str(now.year))
@@ -106,7 +120,6 @@ def main(argv=None):
     parser.add_argument("filenames", nargs="*", help="Filenames to check")
     args = parser.parse_args(argv)
 
-    retv = 0
     for path in args.filenames:
         comment_mark = _get_comment_mark(path)
         if comment_mark is None:
