@@ -1,15 +1,27 @@
-from __future__ import absolute_import
-from __future__ import print_function
-from __future__ import unicode_literals
+# Copyright (c) 2025 SandAI. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import absolute_import, print_function, unicode_literals
 
 import argparse
+import datetime
 import io
+import os
 import re
 import sys
-import os
-import datetime
 
-COPYRIGHT = '''Copyright (c) 2025 SandAI. All Rights Reserved.
+COPYRIGHT = """Copyright (c) 2025 SandAI. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,29 +33,31 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License.'''
+limitations under the License."""
+
 
 def _generate_copyright(comment_mark):
-    copyright=COPYRIGHT.split(os.linesep)
+    copyright = COPYRIGHT.split(os.linesep)
     header = copyright[0].rstrip()
 
-    p = re.search('(\d{4})', header).group(0)
+    p = re.search("(\d{4})", header).group(0)  # noqa: W605
     now = datetime.datetime.now()
 
-    header = header.replace(p,str(now.year))
+    header = header.replace(p, str(now.year))
 
-    ans=[comment_mark + " " + header + os.linesep]
+    ans = [comment_mark + " " + header + os.linesep]
     for idx, line in enumerate(copyright[1:]):
         ans.append(comment_mark + " " + line.rstrip() + os.linesep)
 
     return ans
 
+
 def _get_comment_mark(path):
-    lang_type=re.compile(r"\.(py|sh)$")
+    lang_type = re.compile(r"\.(py|sh)$")
     if lang_type.search(path) is not None:
         return "#"
 
-    lang_type=re.compile(r"\.(h|c|hpp|cc|cpp|cu|go|cuh|proto)$")
+    lang_type = re.compile(r"\.(h|c|hpp|cc|cpp|cu|go|cuh|proto)$")
     if lang_type.search(path) is not None:
         return "//"
 
@@ -54,8 +68,9 @@ RE_ENCODE = re.compile(r"^[ \t\v]*#.*?coding[:=]", re.IGNORECASE)
 RE_COPYRIGHT = re.compile(r".*Copyright \(c\) \d{4}", re.IGNORECASE)
 RE_SHEBANG = re.compile(r"^[ \t\v]*#[ \t]?\!")
 
+
 def _check_copyright(path):
-    head=[]
+    head = []
     try:
         with open(path) as f:
             head = [next(f) for x in range(4)]
@@ -68,14 +83,15 @@ def _check_copyright(path):
 
     return False
 
+
 def generate_copyright(path, comment_mark):
     original_contents = io.open(path, encoding="utf-8").readlines()
     head = original_contents[0:4]
 
-    insert_line_no=0
+    insert_line_no = 0
     for i, line in enumerate(head):
         if RE_ENCODE.search(line) or RE_SHEBANG.search(line):
-            insert_line_no=i+1
+            insert_line_no = i + 1
 
     copyright = _generate_copyright(comment_mark)
     if insert_line_no == 0:
@@ -84,26 +100,26 @@ def generate_copyright(path, comment_mark):
             new_contents.append(os.linesep)
         new_contents.extend(original_contents)
     else:
-        new_contents=original_contents[0:insert_line_no]
+        new_contents = original_contents[0:insert_line_no]
         new_contents.append(os.linesep)
         new_contents.extend(copyright)
-        if len(original_contents) > insert_line_no and len(original_contents[insert_line_no].strip()) != 0:
+        if (
+            len(original_contents) > insert_line_no
+            and len(original_contents[insert_line_no].strip()) != 0
+        ):
             new_contents.append(os.linesep)
         new_contents.extend(original_contents[insert_line_no:])
-    new_contents="".join(new_contents)
+    new_contents = "".join(new_contents)
 
-    with io.open(path, 'w') as output_file:
+    with io.open(path, "w") as output_file:
         output_file.write(new_contents)
 
 
-
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description='Checker for copyright declaration.')
-    parser.add_argument('filenames', nargs='*', help='Filenames to check')
+    parser = argparse.ArgumentParser(description="Checker for copyright declaration.")
+    parser.add_argument("filenames", nargs="*", help="Filenames to check")
     args = parser.parse_args(argv)
 
-    retv = 0
     for path in args.filenames:
         comment_mark = _get_comment_mark(path)
         if comment_mark is None:
@@ -116,5 +132,5 @@ def main(argv=None):
         generate_copyright(path, comment_mark)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     exit(main())
