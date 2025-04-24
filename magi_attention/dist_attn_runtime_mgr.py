@@ -19,7 +19,7 @@ import torch
 import torch.distributed as dist
 
 from magi_attention.common import AttnRanges
-from magi_attention.common.enum import AttnMaskType
+from magi_attention.common.enum import AttnMaskType, AttnRole
 from magi_attention.config import DistAttnConfig
 from magi_attention.functional.dispatch import dispatch_func, undispatch_func
 from magi_attention.functional.dist_attn import DistFlashAttnRuntime, dist_attn_func
@@ -96,6 +96,9 @@ class DistAttnRuntimeMgr:
         self.is_same_source = is_same_source
         self.is_q_permutable = is_q_permutable
         self.is_k_permutable = is_k_permutable
+
+        self._q_position_ids: None | torch.Tensor = None
+        self._k_position_ids: None | torch.Tensor = None
 
     def dispatch_qo(self, q_or_o: torch.Tensor) -> torch.Tensor:
         q_or_o = dispatch_func(
@@ -213,6 +216,28 @@ class DistAttnRuntimeMgr:
             shard_seqlen_q=self.attn_solver.bucket.q_ranges.total_seqlen,
         )
         return attn_arg
+
+    def get_position_ids(self, attn_role: AttnRole = AttnRole.QUERY) -> torch.Tensor:
+        """
+        Get the position ids of local tensor to global tensor after dispatching.
+
+        Args:
+            attn_role (AttnRole): the role of the tensor to get position ids
+
+        Returns:
+            position_ids (torch.Tensor): postion_ids of local tensor to global tensor w.r.t. the attn_role.
+        """
+
+        if attn_role == AttnRole.QUERY:
+            if self._q_position_ids is None:
+                self._q_position_ids = self.q_dispatch_meta.position_ids
+            return self._q_position_ids
+        elif attn_role == AttnRole.KEY or attn_role == AttnRole.VALUE:
+            if self._k_position_ids is None:
+                self._k_position_ids = self.k_dispatch_meta.position_ids
+            return self._k_position_ids
+        else:
+            raise ValueError(f"Invalid attn role: {attn_role}")
 
 
 def init_dist_attn_runtime_mgr(
