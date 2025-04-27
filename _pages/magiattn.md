@@ -124,7 +124,7 @@ Worse still, for irregular attention mask patterns like the aforementioned varle
 
 
 <div class="l-middle" align="center">
-  <img src="assets/img/magiattn/ring_attn_load_balance.png" width="80%">
+  <img src="assets/img/magiattn/comp/ring_attn_load_balance.png" width="80%">
   <div class="caption left">
     Illustration of Ring-Attention’s customized sharding strategies for load balancing. (a) Full mask uses sequential sharding for the global mask; (b) Causal mask employs tailored <em>zigzag sharding</em><d-cite key="ring_flash_attention_issue2"></d-cite>; (c) Varlen full mask applies sequential sharding per local mask (one per packed sample); (d) Varlen causal mask uses <em>zigzag sharding</em> per local mask, causing performance degradation from fragmentation and padding.
   </div>
@@ -145,8 +145,8 @@ Flash Attention<d-cite key="dao2022flashattention,dao2023flashattention,shah2024
 Therefore, we introduce Flex-Flash-Attention (FFA), which is natively designed for distribution scenarios and provides greater flexibility in handling diverse attention mask types. The core idea behind FFA is to generalize a <b>distributable</b> formulation for irregular attention masks by decomposing the entire mask into multiple computational units, each referred to as an $\mathrm{AttnSlice}$. Each $\mathrm{AttnSlice}$ is defined by a triplet $\mathrm{(QRange, KRange, MaskType)}$, which specifies a submask with a basic shape bounded by a contiguous 2D query-key region as seen in the figure below.
 
 
-<div class="l-middle">
-  <img src="assets/img/magiattn/attnslice_interpret.png" width="100%">
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/ffa/attnslice_interpret.png" width="100%">
   <div class="caption left">
     Illustration of $\mathrm{AttnSlice}$ formulation for some irregular mask. It decomposes the original mask into multiple $\mathrm{AttnSlice}$s and allows re-expression of fractal masks after rearrangement across CP ranks, making it suitable for distributed attention. Note that computation load balance across CP ranks is not considered in this illustration.
   </div>
@@ -156,8 +156,8 @@ Therefore, we introduce Flex-Flash-Attention (FFA), which is natively designed f
 Using this formulation, as shown in the figure below, a wide variety of commonly used attention masks, including the varlen block-causal mask for autoregressive video generation, can be expressed as a composition of multiple such triplets even after sharding and rearrrangement in distributed settings, making FFA highly suitable for distributed attention computation.
 
 
-<div class="l-middle">
-  <img src="assets/img/magiattn/mask_with_attn_slice.png" width="100%">
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/ffa/mask_with_attn_slice.png" width="100%">
   <div class="caption left">
     Examples of mask patterns formulated by $\mathrm{AttnSlice}$. (a)-(d) Standard FA3-compatible patterns; (e)-(h) Irregular masks beyond Flash-Attention's capabilities, including the varlen block-causal mask, which FFA supports seamlessly while maintaining performance comparable to FA3.
   </div>
@@ -165,6 +165,42 @@ Using this formulation, as shown in the figure below, a wide variety of commonly
 
 
 Built on Flash-Attention 3 (FA3) kernels<d-cite key="shah2024flashattention3fastaccurateattention"></d-cite>, Flex-Flash-Attention (FFA) leverages Hopper GPUs' TMA feature<d-cite key="nvidia2024accelerating"></d-cite> and introduces slice-level parallelism with atomic operations for correctness as illustrated in the following figure, achieving comparable MFU to FA3 while supporting the flexible $\mathrm{AttnSlice}$ formulation (see [Kernel-Level Experiments](#kernel-level) for FFA performance and flexibility benchmarks compared to other attention kernels).
+
+However, even though we can express most mask patterns using $\mathrm{AttnSlice}$ with two common mask type $\lbrace\mathrm{FULL}, \mathrm{CAUSAL}\rbrace$, but when comes to the mask patterns such as $\textit{sliding-window}$, they are quite inefficient (*in such case, we have to express each row one by one*). Therefore, we design two new but a little bit bizarre mask types named $\lbrace\text{INV-CAUSAL}, \text{BI-CAUSAL}\rbrace$ to efficiently represent more specific mask patterns, and provide some basic examples about the current $4$ mask types we support in the following figures.
+
+Although $\mathrm{AttnSlice}$ can represent most mask patterns using two common types ($\mathrm{FULL}$ and $\mathrm{CAUSAL}$), it is inefficient for patterns like $\textit{sliding-window}$, which requires row-by-row expression. To address this, we introduce two new mask types, $\mathrm{INV\text{-}CAUSAL}$ and $\mathrm{BI\text{-}CAUSAL}$, to efficiently represent more specific $\textit{sliding-window}$-style patterns. We provide basic examples of these four mask types in the following figures.
+
+
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/ffa/attn_slice_mask_type_sq=sk.png" width="80%">
+  <div class="caption">
+    Illustration of the four supported mask types when \( \text{seqlen}_q = \text{seqlen}_k \). (Note: In this case, \(\text{BI-CAUSAL}\) represents a mask with only the principal diagonal cells being valid.)
+  </div>
+</div>
+
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/ffa/attn_slice_mask_type_sq<sk.png" width="80%">
+  <div class="caption">
+    Illustration of the four supported mask types when \( \text{seqlen}_q < \text{seqlen}_k \). (Note: This is the common case when we adopt \(\text{INV-CAUSAL}\) and \(\text{BI-CAUSAL}\).)
+  </div>
+</div>
+
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/ffa/attn_slice_mask_type_sq>sk.png" width="80%">
+  <div class="caption">
+    Illustration of the four supported mask types when \( \text{seqlen}_q > \text{seqlen}_k \). (Note: In this case, \(\text{BI-CAUSAL}\) represents an empty mask with no valid cells.)
+  </div>
+</div>
+
+Based on the four mask types currently supported, we provide examples of how to express common $\textit{sliding-window}$-style mask patterns using the $\mathrm{AttnSlice}$ formulation, as illustrated in the figure below.
+
+<div class="l-middle" align="center">
+  <img src="assets/img/magiattn/ffa/sw_mask_with_slice.png" width="100%">
+  <div class="caption">
+    Examples of common $\textit{sliding-window}$-style mask patterns formulated by $\mathrm{AttnSlice}$.
+  </div>
+</div>
+
 
 ### Comp Load-Balance
 
@@ -187,7 +223,7 @@ $$
 However, this optimization is a known NP-hard problem, making it impractical to find an optimal solution on-the-fly during each training iteration, especially given the varying mask patterns across micro-batches. Thus, we propose an efficient greedy algorithm as shown below that provides a suboptimal yet effective solution within $O(n\log n)$ complexity.
 
 <div class="l-body">
-  <img src="assets/img/magiattn/min_hp_alg.png" width="100%">
+  <img src="assets/img/magiattn/comp/min_hp_alg.png" width="100%">
   <div class="caption">
     Greedy Load-Balance Dispatch Algorithm via Min-Heap
   </div>
@@ -199,7 +235,7 @@ The existing ring-style implementation uses point-to-point send/recv communicati
 
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/ring-p2p-redundancy.png" width="100%">
+  <img src="assets/img/magiattn/comm/ring_p2p_redundancy.png" width="100%">
   <div class="caption">
     Examples illustrating redundant communication in Ring P2P patterns for distributed attention given heterogeneous masks.: (a) Even with a simple causal mask, Ring P2P incurs <b>25%</b> redundant communication; (b) For irregular mask patterns such as varlen block-causal mask with last global block, Ring P2P results in over <b>33%</b> redundancy.
   </div>
@@ -208,7 +244,7 @@ The existing ring-style implementation uses point-to-point send/recv communicati
 To address this, as illustrated in the figure below, we introduce two communication primitives: $\textit{Group-Cast}$ and $\textit{Group-Reduce}$, which model the communication patterns of low-demand $\mathrm{KV}$ and $\mathrm{dKV}$. For example, in the causal mask, $\mathrm{KV}_5$ on $\mathrm{rank}_2$ is required only by $\{\mathrm{Q}_6,\mathrm{Q}_7\}$ and should be sent exclusively to the target ranks $\{\mathrm{rank}_0, \mathrm{rank}_1\}$ via Group-Cast, while the partial $\mathrm{dKV}_5$ is collected and reduced back to $\mathrm{rank}_2$ via Group-Reduce accordingly.
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/group-gather-reduce-all2allv.png" width="100%">
+  <img src="assets/img/magiattn/comm/group_gather_reduce_all2allv.png" width="100%">
   <div class="caption left">
     Illustration of Group-Cast/Group-Reduce primitives for zero redundancy, using the varlen block-causal mask with the last global block as an example for irregular patterns. (a) In both forward and backward passes, the Group-Cast primitive internally analyzes and generates a transfer table for $\mathrm{KV}$ send/receive buffers, and launches the underlying All-to-All-v to complete communication with our custom $\texttt{Range Gather}$ kernel for pre-/post-processing. (b) In the backward pass, Group-Reduce similarly handles the partial $\mathrm{dKV}$ communication for reduction, using All-to-All-v with the \texttt{Range Gather} kernel for pre-processing and the $\texttt{Range Scatter-Reduce}$ kernel for post-processing.
   </div>
@@ -224,7 +260,7 @@ Leveraging previous optimizations, we achieve high-performance computation throu
 Similar to prior works<d-cite key="liu2023ringattentionblockwisetransformers,zhao2023pytorch,async_tensor_parallelism_in_pytorch"></d-cite>, we schedule pipeline stages to overlap computation with communication for both forward and backward passes, as shown in the following figureFig. Each $\mathrm{rank}_i$ first partitions its remote $\mathrm{KV}$/$\mathrm{dKV}$ communication into stages. 
 
 <div class="l-middle">
-  <img src="assets/img/magiattn/multi_stage_overlap_fwd_bwd.png" width="100%">
+  <img src="assets/img/magiattn/mso/multi_stage_overlap_fwd_bwd.png" width="100%">
   <div class="caption left">
     Schematic of Magi Attention's multi-stage overlap scheduling. (a) Forward pass: 4-stage scheduling overlaps computation (partial attention outputs and $\textit{lse}$ factors) with prefetching of next-stage $\mathrm{KV}$ requests (where applicable), hiding all communication overhead with the final stage's computation exposed. (b) Backward pass: 3-stage scheduling overlaps computation (partial $\mathrm{dQ}$, $\mathrm{dKV}$) with prefetching of next-stage $\mathrm{KV}$ requests and reduction of prior $\mathrm{dKV}$ requests, hiding all communication overhead except the $\mathrm{dKV}$ reduction of the final stage.
   </div>
@@ -238,7 +274,7 @@ In the backward pass, besides prefetching the next $\mathrm{KV}$, the Group-Redu
 To adaptively control overlap granularity, we further introduce a tunable hyperparameter, $\texttt{num_stages}$, accounting for varying compute-to-communication ratios across training setups, microbatches, or between forward and backward passes. This parameter can be manually configured or automatically determined by our $\textit{overlap solver}$, with a simple dynamic search algorithm as shown below.
 
 <div class="l-body" align="center">
-  <img src="assets/img/magiattn/dynamic_mso_alg.png" width="80%">
+  <img src="assets/img/magiattn/mso/dynamic_mso_alg.png" width="80%">
   <div class="caption">
     Dynamic Overlap Stage Search Algorithm
   </div>
@@ -262,7 +298,7 @@ To demonstrate FFA kernels' state-of-the-art performance and flexibility in hand
 Benchmark settings: for each mask pattern, we vary the sequence length $seqlen$ from $4k,8k,16k,...,$ up to $128k$ ($seqlen_q = seqlen_k = seqlen$) while measuring the throughput (in $\texttt{TFLOPs/s}$) for forward and backward passes of different attention kernels. Other configurations are fixed using common training settings (see the table above) to focus on the impact of sequence length and mask pattern. For the varlen packed data, we simply follow the variable sequence length distribution in the open-sourced dataset<d-cite key="xu2024chatqa"></d-cite> illustrated in the following figure, from which we sample to pack and pad to the required $seqlen$.
 
 <div class="l-middle" align="center">
-  <img src="assets/img/magiattn/varlen_seqlen_distribution.png" width="80%">
+  <img src="assets/img/magiattn/ffa_exp/varlen_seqlen_distribution.png" width="80%">
   <div class="caption">
     Distribution of sequence lengths in the dataset<d-cite key="xu2024chatqa"></d-cite>, used to sample and construct the variable-length data for both kernel-level and module-level experiments of MagiAttention.
   </div>
