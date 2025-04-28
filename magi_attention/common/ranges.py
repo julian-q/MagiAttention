@@ -654,6 +654,10 @@ class AttnRanges:
         return max(attn_range.end for attn_range in self._ranges)
 
     @property
+    def size(self) -> int:
+        return len(self._ranges)
+
+    @property
     def points(self) -> list[int]:
         """The axis points covered by this ranges
         in ascending order and without duplicates

@@ -184,7 +184,7 @@ class TestInterfacePipelineSDPABaseWithWorldSize1(DistTestBase):
                         [1024, 2048],
                     ]
                 ),
-                "is_causal_mapping": [False, False],
+                "is_causal_mapping": True,
                 "total_seqlen_q": 2048,
                 "total_seqlen_k": 2048,
             },
@@ -239,7 +239,7 @@ class TestInterfacePipelineSDPABaseWithWorldSize1(DistTestBase):
                         [768, 1050],
                     ]
                 ),
-                "is_causal_mapping": [False] * 7,
+                "is_causal_mapping": False,
                 "total_seqlen_q": 1050,
                 "total_seqlen_k": 1050,
             },
@@ -481,10 +481,9 @@ class TestInterfacePipelineSDPABaseWithWorldSize1(DistTestBase):
         q_ranges: AttnRanges = attn_config_["q_ranges"]
         k_ranges: AttnRanges = attn_config_["k_ranges"]
         interface: str = attn_config_[INTERFACE]
-        is_causal_mapping: list[bool] = attn_config_["is_causal_mapping"]
+        is_causal_mapping: bool | list[bool] = attn_config_["is_causal_mapping"]
         total_seqlen_q: int = attn_config_["total_seqlen_q"]
         total_seqlen_k: int = attn_config_["total_seqlen_k"]
-        # head_dim: int = attn_config_["head_dim"]
 
         device = torch.cuda.current_device()
 
@@ -532,7 +531,9 @@ class TestInterfacePipelineSDPABaseWithWorldSize1(DistTestBase):
                 head_dim=head_dim,
                 pad_size=pad_size,
                 cp_group=self.nccl_group,
-                causal=is_causal_mapping[0],
+                causal=is_causal_mapping[0]
+                if isinstance(is_causal_mapping, list)
+                else is_causal_mapping,
                 dist_attn_config=dist_attn_config,
             )
 
@@ -546,19 +547,29 @@ class TestInterfacePipelineSDPABaseWithWorldSize1(DistTestBase):
                 head_dim=head_dim,
                 pad_size=pad_size,
                 cp_group=self.nccl_group,
-                causal=is_causal_mapping[0],
+                causal=is_causal_mapping[0]
+                if isinstance(is_causal_mapping, list)
+                else is_causal_mapping,
                 dist_attn_config=dist_attn_config,
             )
 
         if interface == "magi_attn_flex":
+            attn_mask_type: AttnMaskType | list[AttnMaskType]
+            if isinstance(is_causal_mapping, list):
+                attn_mask_type = [
+                    AttnMaskType.CAUSAL if is_causal else AttnMaskType.FULL
+                    for is_causal in is_causal_mapping
+                ]
+            else:
+                attn_mask_type = (
+                    AttnMaskType.CAUSAL if is_causal_mapping else AttnMaskType.FULL
+                )
+
             x_padded, dist_attn_runtime_key = magi_attn_flex_dispatch(
                 x,
                 q_ranges=q_ranges,
                 k_ranges=k_ranges,
-                attn_mask_type=[
-                    AttnMaskType.CAUSAL if is_causal else AttnMaskType.FULL
-                    for is_causal in is_causal_mapping
-                ],
+                attn_mask_type=attn_mask_type,
                 total_seqlen_q=total_seqlen_q,
                 total_seqlen_k=total_seqlen_k,
                 head_dim=head_dim,
@@ -612,7 +623,7 @@ class TestInterfacePipelineSDPABaseWithWorldSize1(DistTestBase):
         x_grad: torch.Tensor,
         q_ranges: AttnRanges,
         k_ranges: AttnRanges,
-        is_causal_mapping: list[bool],
+        is_causal_mapping: bool | list[bool],
         total_seqlen_q: int,
         total_seqlen_k: int,
         total_out: torch.Tensor,

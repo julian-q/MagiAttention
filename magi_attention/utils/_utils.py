@@ -276,11 +276,16 @@ def make_causal_mask(
 def get_attn_mask_from_ranges(
     q_ranges: "NaiveRanges",
     k_ranges: "NaiveRanges",
-    is_causal_mapping: list[bool],
+    is_causal_mapping: bool | list[bool],
     total_seqlen_q: int,
     total_seqlen_k: int,
 ) -> torch.Tensor:
-    assert len(q_ranges) == len(k_ranges) == len(is_causal_mapping)
+    if isinstance(is_causal_mapping, list):
+        assert len(q_ranges) == len(k_ranges) == len(is_causal_mapping)
+    else:
+        is_causal_mapping = wrap_to_list(
+            is_causal_mapping, broadcast_to_length=len(q_ranges)
+        )
 
     mask = torch.zeros(
         (total_seqlen_q, total_seqlen_k),
