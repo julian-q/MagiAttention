@@ -334,7 +334,7 @@ def magi_attn_flex_key(
             f"q_ranges ({q_ranges}) should not have overlap for now. This feature is coming in a near future release."
         )
 
-    attn_mask_type = wrap_to_list(attn_mask_type)
+    attn_mask_type = wrap_to_list(attn_mask_type, broadcast_to_length=q_ranges.size)
 
     if is_list_value_any(attn_mask_type, AttnMaskType.BICAUSAL):
         raise ValueError(
