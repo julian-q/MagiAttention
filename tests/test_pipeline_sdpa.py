@@ -38,6 +38,7 @@ from magi_attention.testing import parameterize
 from magi_attention.testing.dist_common import DistTestBase, with_comms
 from magi_attention.testing.precision import EPSILON, torch_attn_ref
 from magi_attention.utils import get_attn_mask_from_ranges, str2seed, sync_rng
+from magi_attention.utils._utils import is_list_value_all
 
 NAME = "name"
 SKIP_WORLD_SIZE = "skip_world_size"
@@ -428,6 +429,212 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
                 "total_seqlen_k": 1024,
                 "chunk_size": 128,
             },
+            # share question mask with total seqlen 1k + overlapped q ranges
+            {
+                NAME: "share_question_1k_with_q_overlap",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 1024],
+                        [128, 256],
+                        [256, 512],
+                        [512, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 512],
+                        [512, 1024],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 4,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # half-inv block diagonal with total seqlen 1k
+            # + interleaved overlapped q ranges
+            {
+                NAME: "half_inv_block_diagonal_1k_with_interleave_q_overlap",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [64, 192],
+                        [128, 256],
+                        [192, 320],
+                        [256, 384],
+                        [320, 448],
+                        [384, 512],
+                        [448, 576],
+                        [512, 640],
+                        [576, 704],
+                        [640, 768],
+                        [704, 832],
+                        [768, 896],
+                        [832, 960],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 192],
+                        [192, 256],
+                        [192, 320],
+                        [256, 384],
+                        [320, 448],
+                        [384, 512],
+                        [896, 1024],
+                        [832, 960],
+                        [768, 896],
+                        [704, 832],
+                        [640, 768],
+                        [576, 704],
+                        [512, 640],
+                        [448, 576],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 15,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # varlen block causal with total seqlen 1k + overlapped q ranges
+            {
+                NAME: "varlen_block_causal_1k_with_q_overlap",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 1024],
+                        [128, 1024],
+                        [256, 1024],
+                        [384, 1024],
+                        [512, 1024],
+                        [640, 1024],
+                        [768, 1024],
+                        [896, 1024],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 1024],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # several random mask in overlap q_range with 1k mask
+            {
+                NAME: "random_overlap_mask_1k",
+                SKIP_WORLD_SIZE: [3, 5, 6, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 64],
+                        [96, 128],
+                        [32, 96],
+                        [128, 320],
+                        [192, 256],
+                        [200, 448],
+                        [700, 896],
+                        [768, 832],
+                        [640, 800],
+                        [896, 1024],
+                        [928, 960],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 32],
+                        [16, 64],
+                        [96, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 896],
+                        [896, 960],
+                        [960, 1024],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 11,
+                "total_seqlen_q": 1024,
+                "total_seqlen_k": 1024,
+                "chunk_size": 128,
+            },
+            # varlen block causal with total seqlen 840 + overlapped q ranges
+            {
+                NAME: "varlen_block_causal_840_with_q_overlap",
+                SKIP_WORLD_SIZE: [4, 8],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 512],
+                        [128, 512],
+                        [256, 512],
+                        [384, 512],
+                        [512, 840],
+                        [640, 840],
+                        [768, 840],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 128],
+                        [128, 256],
+                        [256, 384],
+                        [384, 512],
+                        [512, 640],
+                        [640, 768],
+                        [768, 840],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 7,
+                "total_seqlen_q": 840,
+                "total_seqlen_k": 840,
+                "chunk_size": 4,
+            },
+            # half-inv block diagonal with total seqlen 1050
+            # + interleaved overlapped q ranges
+            {
+                NAME: "half_inv_block_diagonal_1050_with_interleave_q_overlap",
+                SKIP_WORLD_SIZE: [4, 8],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 420],
+                        [210, 630],
+                        [420, 840],
+                        [630, 1050],
+                        [0, 210],
+                        [840, 1050],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 210],
+                        [210, 420],
+                        [420, 630],
+                        [630, 840],
+                        [840, 1050],
+                        [840, 1050],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 6,
+                "total_seqlen_q": 1050,
+                "total_seqlen_k": 1050,
+                "chunk_size": 5,
+            },
         ],
     )
     @parameterize(
@@ -579,6 +786,13 @@ class TestPipelineSDPABaseWithWorldSize1(DistTestBase):
                 is_causal_mapping = [
                     random.choice([True, False]) for _ in is_causal_mapping
                 ]
+
+        # -----    skip for overlapped q_range with causal mask  ---- #
+
+        if not q_ranges.is_non_overlap() and not is_list_value_all(
+            is_causal_mapping, False
+        ):
+            return
 
         total_seqlen_q: int = attn_config["total_seqlen_q"]
         total_seqlen_k: int = attn_config["total_seqlen_k"]

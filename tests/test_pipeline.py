@@ -43,6 +43,7 @@ from magi_attention.testing.precision import (
     torch_attn_ref,
 )
 from magi_attention.utils import get_attn_mask_from_ranges, str2seed, sync_rng
+from magi_attention.utils._utils import is_list_value_all
 
 # tell if using profile mode
 profile_mode = os.environ.get("MAGI_ATTENTION_UNITEST_PROFILE_MODE", "0") == "1"
@@ -233,6 +234,100 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
                 "total_seqlen_k": 17808,
                 "chunk_size": 1113,
             },
+            # varlen block causal with total seqlen 10k + overlapped q ranges
+            {
+                NAME: "varlen_block_causal_10k_with_q_overlap",
+                SKIP_WORLD_SIZE: [3, 6, 7, 8],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 10240],
+                        [1280, 10240],
+                        [2560, 10240],
+                        [3840, 10240],
+                        [5120, 10240],
+                        [6400, 10240],
+                        [7680, 10240],
+                        [8960, 10240],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 1280],
+                        [1280, 2560],
+                        [2560, 3840],
+                        [3840, 5120],
+                        [5120, 6400],
+                        [6400, 7680],
+                        [7680, 8960],
+                        [8960, 10240],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 8,
+                "total_seqlen_q": 10240,
+                "total_seqlen_k": 10240,
+                "chunk_size": 512,
+            },
+            # varlen block causal with total seqlen 12k + overlapped q ranges
+            {
+                NAME: "varlen_block_causal_12k_with_q_overlap",
+                SKIP_WORLD_SIZE: [5, 7],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 8192],
+                        [2048, 8192],
+                        [4096, 8192],
+                        [6144, 8192],
+                        [8192, 12288],
+                        [10240, 12288],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 2048],
+                        [2048, 4096],
+                        [4096, 6144],
+                        [6144, 8192],
+                        [8192, 10240],
+                        [10240, 12288],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 6,
+                "total_seqlen_q": 12288,
+                "total_seqlen_k": 12288,
+                "chunk_size": 512,
+            },
+            # half-inv block diagonal with total seqlen 10k
+            # + interleaved overlapped q ranges
+            {
+                NAME: "varlen_block_causal_12k_with_q_overlap",
+                SKIP_WORLD_SIZE: [2, 4, 5, 6, 8],
+                "q_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 3072],
+                        [1536, 4608],
+                        [3072, 6144],
+                        [4608, 7680],
+                        [6144, 9216],
+                        [7680, 10752],
+                        [9216, 10752],
+                    ]
+                ),
+                "k_ranges": AttnRanges.from_ranges(
+                    [
+                        [0, 1536],
+                        [1536, 3072],
+                        [3072, 4608],
+                        [4608, 6144],
+                        [6144, 7680],
+                        [7680, 9216],
+                        [9216, 10752],
+                    ]
+                ),
+                "is_causal_mapping": [False] * 7,
+                "total_seqlen_q": 10752,
+                "total_seqlen_k": 10752,
+                "chunk_size": 512,
+            },
             # NOTE: profile only case
             # full attn with total seqlen 140k
             # {
@@ -411,8 +506,7 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
     @parameterize(
         "dtype",
         [
-            # XXX HACK: for latest ffa interface
-            # torch.float16,
+            torch.float16,
             torch.bfloat16,
         ],
     )
@@ -486,6 +580,13 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
                 is_causal_mapping = [
                     random.choice([True, False]) for _ in is_causal_mapping
                 ]
+
+        # -----    skip for overlapped q_range with causal mask  ---- #
+
+        if not q_ranges.is_non_overlap() and not is_list_value_all(
+            is_causal_mapping, False
+        ):
+            return
 
         total_seqlen_q: int = attn_config["total_seqlen_q"]
         total_seqlen_k: int = attn_config["total_seqlen_k"]
@@ -737,7 +838,6 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
             rtol=o_rtol,
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
-
         magi_attention.testing.assert_close(
             total_out,
             total_out_ref_high_precision,
@@ -768,7 +868,6 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
             rtol=dq_rtol,
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
-
         magi_attention.testing.assert_close(
             grad_total_q,
             grad_total_q_ref_high_precision,
@@ -799,7 +898,6 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
             rtol=dk_rtol,
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
-
         magi_attention.testing.assert_close(
             grad_total_k,
             grad_total_k_ref_high_precision,
@@ -830,7 +928,6 @@ class TestPipelineBaseWithWorldSize1(DistTestBase):
             rtol=dv_rtol,
             mismatch_thres_ratio=mismatch_thres_ratio,
         )
-
         magi_attention.testing.assert_close(
             grad_total_v,
             grad_total_v_ref_high_precision,
