@@ -14,6 +14,7 @@
 
 import functools
 import hashlib
+import os
 import random
 import warnings
 from contextlib import contextmanager
@@ -84,6 +85,37 @@ def write_rank(
 
         with open(path, "a") as f:
             f.write(write_content)
+
+
+def setup_dist_env(
+    base_seed: int | None = None,
+    seed_bias: Callable = lambda rank: 0,
+) -> tuple[int, int, int, dist.ProcessGroup, int, int | None]:
+    """set up distributed environment with NCCL backend,
+    NOTE: the test script using this func to set up should be executed through torchrun
+    """
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    torch.cuda.set_device(local_rank)
+    device = torch.cuda.current_device()
+
+    dist.init_process_group(
+        backend="nccl",
+        rank=rank,
+        world_size=world_size,
+    )
+
+    seed = None
+    if base_seed is not None:
+        seed = base_seed + seed_bias(rank)
+        torch.manual_seed(seed)
+
+    return rank, local_rank, world_size, dist.group.WORLD, device, seed  # noqa: E231
+
+
+def clearup_dist_env() -> None:
+    dist.destroy_process_group()
 
 
 NestedIntList: TypeAlias = Union[list[int], tuple[int, ...], Sequence["NestedIntList"]]

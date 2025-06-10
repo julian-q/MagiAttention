@@ -62,6 +62,7 @@ For implementation details, more experimental results and future works, please v
 - [ ] Refactor `Distributed Attention Solver` as well as `Flex-Flash-Attention` kernel arguments to support all mask types with all kinds of overlap, and reduce CPU overhead for meta info calculation
 - [ ] Improve `Dispatch Solver` to reduce necessary communication volumn while remaining balance in computation (*especially for varlen mask patterns*)
 - [ ] Build a comprehensive `CP Benchmark` to better compare the performance of different context parallel strategies under various mask patterns and other training configurations
+- [ ] Provide `Documentation` including `API reference` and `User Guide`, with a more detailed technical blog
 
 
 ## Installation ⚙️
@@ -116,187 +117,195 @@ For implementation details, more experimental results and future works, please v
 
 ### Basic Usage
 
-We provide an example(pseudo-code) of how to use flex_flash_attention(kernel) and magi_attention(context parallel only) to accelerate local/distribute attention calculation.
+We provide basic example code below of how to use `flex_flash_attention` (*non-distributed attention function*) and `magi_attention` (*distributed attention mechanism*), respectively.
 
-You can refer to the magi_attention/api/magi_attn_interface.py for more information.
+For more usage instructions, you can refer to `magi_attention/functional/flex_flash_attn.py` and `magi_attention/api/magi_attn_interface.py`, respectively.
 
 <details>
 <summary>Basic Usage</summary>
 
-flex_flash_attention(kernel):
-```python
-from magi_attention.api import flex_flash_attn_func
+- **flex_flash_attention**:
+  ```python
+  import torch
+  from magi_attention.api import flex_flash_attn_func
 
-# --- Define Attention Structure ---
-device='cuda'
-# Shape: [num_ranges, 2]
-q_ranges_tensor = torch.tensor([[0, 100], [100, 250]], device=device, dtype=torch.int32)
-k_ranges_tensor = torch.tensor([[0, 100], [0, 250]], device=device, dtype=torch.int32)
+  # --- Define attention config --- #
 
-max_seqlen_q = 150 # Max length of any q_range (250-100 = 150)
-max_seqlen_k = 250 # Max length of any k_range (250-0 = 250)
+  total_seqlen = 2048    # 2k tokens
+  num_heads_q = 8        # number of attention (query) heads
+  num_heads_kv = 2       # number of key/value heads (GQA)
+  head_dim = 128         # dimension of each attention head
+  dtype = torch.bfloat16 # attention activation / computation dtype (while the reduction dtype is always fp32 for ffa right now)
+  device = "cuda"
 
-# attn_type_map values:
-# 0: full attention
-# 1: causal attention (bottom-right aligned)
-# 2: inverse causal attention (top-left aligned)
-# 3: bidirectional causal attention (diagonal)
-# for more information about attn mask type, please refer to our blog:
-# https://sandai-org.github.io/MagiAttention/
-attn_type_map_tensor = torch.tensor([1, 0], device=device, dtype=torch.int32) # Causal for 1st, Full for 2nd
+  # --- Initialize QKV tensor --- #
 
-# --- Forward Pass ---
-# disable_fwd_atomic_reduction=True can be used if q_ranges are guaranteed to be non-overlapping for performance.
-# If q_ranges might overlap (e.g. for specific sparse patterns not representable as disjoint blocks), set it to False.
-out_ffa, lse_ffa = flex_flash_attn_func(
-    q, k, v,
-    q_ranges=q_ranges_tensor,
-    k_ranges=k_ranges_tensor,
-    max_seqlen_q=max_seqlen_q,
-    max_seqlen_k=max_seqlen_k,
-    attn_type_map=attn_type_map_tensor,
-    softmax_scale=None, # Defaults to 1/sqrt(head_dim)
-    disable_fwd_atomic_reduction=True # Assuming q_ranges here are disjoint after any potential processing
-)
+  q = torch.randn(total_seqlen, num_heads_q, head_dim, dtype=dtype, device=device)
+  k = torch.randn(total_seqlen, num_heads_kv, head_dim, dtype=dtype, device=device)
+  v = torch.randn(total_seqlen, num_heads_kv, head_dim, dtype=dtype, device=device)
 
-```
+  # --- Initialize FFA meta args for customized attention mask --- #
 
+  # the following customized attention mask looks like (`*` for unmasked, `0` for masked):
+  #     - - - - - - - - -> (k)
+  #   | * * * * 0 0 0 0
+  #   | * * * * 0 0 0 0
+  #   | * * * * 0 0 0 0
+  #   | * * * * 0 0 0 0
+  #   | * * * * * 0 0 0
+  #   | * * * * * * 0 0
+  #   | * * * * * * * 0
+  #   | * * * * * * * *
+  #   V
+  #  (q)
+  q_ranges_tensor = torch.tensor([[0, 1024], [1024, 2048]], dtype=torch.int32, device=device)
+  k_ranges_tensor = torch.tensor([[0, 1024], [0, 2048]], dtype=torch.int32, device=device)
+  attn_type_map_tensor = torch.tensor([0, 1], dtype=torch.int32, device=device) # full mask for 1st slice, causal mask for 2nd
 
-flash_attn_varlen like interface(magi_attn_varlen_dispatch):
-```python
-from magi_attention.api import magi_attn_varlen_dispatch, undispatch, calc_attn, squash_batch_dim, full_attention_to_varlen_attention, compute_pad_size   # func tools and interface
+  max_seqlen_q = 1024 # Max length of all q_ranges (2048 - 1024 = 1024)
+  max_seqlen_k = 2048 # Max length of all k_ranges (2048 - 0 = 2048)
 
-# ---  prepare data and args for magi_attention --- #
+  # --- Attention computation --- #
 
-# create input data with shape (bs, seqlen, h)
-x = torch.randn(
-            batchsize,
-            seqlen,
-            h,
-            device=device,
-            dtype=dtype,
-            requires_grad = True
-        )
+  out, _ = flex_flash_attn_func( # the second return value is `lse` (log-sum-exp), known as the online-softmax correction factor
+      q, k, v,
+      q_ranges=q_ranges_tensor,
+      k_ranges=k_ranges_tensor,
+      max_seqlen_q=max_seqlen_q,
+      max_seqlen_k=max_seqlen_k,
+      attn_type_map=attn_type_map_tensor,
+      softmax_scale=None, # defaults to 1/sqrt(head_dim)
+  )
+  ```
 
-# squash the batch dim, magi_attention do not support input data with batch dim.
-x = squash_batch_dim(x_with_batch)  # ((b, seqlen), h)
+- **magi_attention**: (*NOTE: You should run the following examples in a distributed environment, e.g. using the common `torchrun` script*)
+  ```python
+  import torch
+  import torch.nn as nn
+  from magi_attention.api import (
+      magi_attn_flex_dispatch, calc_attn, undispatch, # interface functions
+      compute_pad_size, # helper functions
+  )
+  from magi_attention.common import AttnRanges
+  from magi_attention.common.enum import AttnMaskType
+  from magi_attention.utils import setup_dist_env, clearup_dist_env
 
-# get cu_seqlens_q,k after squashing.
-cu_seqlens_q, cu_seqlens_k = full_attention_to_varlen_attention(
-                                batch_size, seqlen
-                             )
+  # --- Set up distributed environment --- #
 
-# pad input seqlen for better performance
-pad_size, _ = compute_pad_size(x, cp_size, head_dim)
+  rank, local_rank, world_size, world_group, device, seed = setup_dist_env()
 
-total_seqlen_q: int = batchsize * seqlen
-total_seqlen_k: int = batchsize * seqlen
+  # --- Define attention config --- #
 
-# ---   magi_attention dispatch   --- #
+  total_seqlen = 32 * 1024   # 32k tokens, if we dispatch it to 8 GPUs, then each GPU holds 4k tokens
+  num_heads_q = 48           # number of attention (query) heads
+  num_heads_kv = 8           # number of key/value heads (GQA)
+  head_dim = 128             # dimension of each attention head
+  dtype = torch.bfloat16     # attention activation / computation dtype (while the reduction dtype for partial attention outputs is always fp32 for magi_attention right now)
 
-# dispatch global input tensor to each rank and get the runtime_key
-local_x, magi_attn_runtime_key = magi_attn_varlen_dispatch(  # local_x with shape ((total_seq + pad_size) / cp_size), h)
-        x,
-        cu_seqlens_q,
-        cu_seqlens_k,
-        head_dim=head_dim,
-        pad_size=pad_size,
-        cp_group=cp_group,
-        causal=False,
-        dist_attn_config=DistAttnConfig(
-                dispatch_config=DispatchConfig(alg=MinHeapDispatchAlg()),
-                overlap_config=OverlapConfig(
-                enable=True,
-                mode=AttnOverlapMode.STATIC,
-                degree=2,
-                min_chunk_size=512,
-                max_num_chunks=64,
-                alg=OverlapAlgType.UNIFORM,
-                ),
-            ),
-        )
+  # --- Initialize token embedding tensor --- #
 
-......
+  embed_dim = 4096
+  x = torch.randn(total_seqlen, embed_dim, device=device, dtype=dtype, requires_grad=True)
 
-# ---  magi_attention calculation and undispatch  --- #
-# do q k v projection
-local_q, local_k, local_v = q_project(local_x), k_project(local_x), v_project(local_x)  # q, k, v with shape (bs * seqlen / cp_size, nh, hd)
+  # --- Initialize MagiAttention meta configs for customized attention mask --- #
 
-# Do local attention computation with runtime key
-local_out, _ = calc_attn(local_q, local_k, local_v, magi_attn_runtime_key) # local out with shape (bs * seqlen / cp_size, h)
+  # the following customized attention mask is known as `block-causal` mask where `block_size` = 4096 (4k),
+  # which looks like (`*` for unmasked, `0` for masked):
+  #     - - - - - - - - -> (k)
+  #   | * * 0 0 0 0 0 0
+  #   | * * 0 0 0 0 0 0
+  #   | * * * * 0 0 0 0
+  #   | * * * * 0 0 0 0
+  #   | * * * * * * 0 0
+  #   | * * * * * * 0 0
+  #   | * * * * * * * *
+  #   | * * * * * * * *
+  #   V
+  #  (q)
+  q_ranges = AttnRanges.from_ranges(
+      [
+          [0, 4096], # 0~4k
+          [4096, 8192], # 4k~8k
+          [8192, 12288], # 8k~12k
+          [12288, 16384], # 12k~16k
+          [16384, 20480], # 16k~20k
+          [20480, 24576], # 20k~24k
+          [24576, 28672], # 24k~28k
+          [28672, 32768], # 28k~32k
+      ]
+  )
+  k_ranges = AttnRanges.from_ranges(
+      [
+          [0, 4096], # 0~4k
+          [0, 8192], # 0~8k
+          [0, 12288], # 0~12k
+          [0, 16384], # 0~16k
+          [0, 20480], # 0~20k
+          [0, 24576], # 0~24k
+          [0, 28672], # 0~28k
+          [0, 32768], # 0~32k
+      ]
+  )
+  attn_mask_type = [AttnMaskType.FULL] * len(q_ranges)
+  total_seqlen_q = total_seqlen_k = total_seqlen
+  pad_size, _ = compute_pad_size( # pad embeds along seqlen dim for better performance
+    total_seqlen_q=total_seqlen_q,
+    cp_size=world_size, # assuming we only have 1-dim context parallelism (cp)
+    head_dim=head_dim,
+  )
 
-# Gather local attention results to global result with runtime key
-total_out = undispatch(local_out, magi_attn_runtime_key)   # total out with shape (bs * seqlen, h)
-```
+  # --- Dispatch token embedding tensor along seqlen dim to multiple ranks --- #
 
-magi_attn_flex_dispatch(more flexible):
-```python
-from magi_attention.api import magi_attn_flex_dispatch, undispatch, calc_attn, squash_batch_dim, full_attention_to_varlen_attention, compute_pad_size   # func tools and interface
+  # NOTE:
+  # 1. the dispatched local token embedding may be shuffled along seqlen dim,
+  #    so it's safe for token-wise operations such as matmul, layer-norm, etc
+  #    while for sample-wise operations like RoPE, you might need to be more careful
+  # 2. the `magi_runtime_key` holds some inner meta data as one argument for many other magi_attention APIs,
+  #    about which the users may have no bother to care
+  local_x, magi_attn_runtime_key = magi_attn_flex_dispatch(
+      x,
+      q_ranges=q_ranges,
+      k_ranges=k_ranges,
+      attn_mask_type=attn_mask_type,
+      total_seqlen_q=total_seqlen_q,
+      total_seqlen_k=total_seqlen_k,
+      head_dim=head_dim,
+      pad_size=pad_size,
+      cp_group=world_group, # assuming we only have 1-dim context parallelism (cp)
+  )
 
-x = torch.randn(
-          seqlen,
-          h,
-          device=device,
-          dtype=dtype,
-          requires_grad = True
-      )
-# block mask
-q_ranges = AttnRanges.from_ranges(
-                    [
-                        [0, 128],
-                        [128, 256],
-                        [256, 384],
-                        [384, 512],
-                        [512, 640],
-                        [640, 768],
-                        [768, 960],
-                    ]
-                ),
-k_ranges = AttnRanges.from_ranges(
-                    [
-                        [0, 128],
-                        [0, 256],
-                        [0, 384],
-                        [0, 512],
-                        [512, 640],
-                        [512, 768],
-                        [768, 960],
-                    ]
-                ),
+  # --- Simulate QKV projection --- #
 
-total_seqlen_q = 960
-total_seqlen_k = 960
-attn_mask_type = [AttnMaskType.FULL] * 7
-pad_size, _ = compute_pad_size(total_seqlen_q, cp_size, head_dim)
+  q_proj = nn.Linear(embed_dim, num_heads_q * head_dim, dtype=dtype, device=device)
+  k_proj = nn.Linear(embed_dim, num_heads_kv * head_dim, dtype=dtype, device=device)
+  v_proj = nn.Linear(embed_dim, num_heads_kv * head_dim, dtype=dtype, device=device)
 
-local_x, magi_attn_runtime_key = magi_attn_flex_dispatch( # local_x with shape (total_seqlen_q + pad_size) / cp_size, h)
-                x,
-                q_ranges=q_ranges,
-                k_ranges=k_ranges,
-                attn_mask_type=attn_mask_type,
-                total_seqlen_q=total_seqlen_q,
-                total_seqlen_k=total_seqlen_k,
-                head_dim=head_dim,
-                pad_size=pad_size,
-                cp_group=self.nccl_group,
-                is_same_source=True,
-                is_q_permutable=True,
-                is_k_permutable=True,
-                dist_attn_config=dist_attn_config,
-          )
+  local_q = q_proj(local_x).view(-1, num_heads_q, head_dim)
+  local_k = k_proj(local_x).view(-1, num_heads_kv, head_dim)
+  local_v = v_proj(local_x).view(-1, num_heads_kv, head_dim)
 
-......
+  # --- Distributed attention computation --- #
 
-# ---  magi_attention calculation and undispatch  --- #
-# do q k v projection
-local_q, local_k, local_v = q_project(local_x), k_project(local_x), v_project(local_x)  # q, k, v with shape (s, nh, hd)
+  local_out, _ = calc_attn( # the second return value is `local_lse` (log-sum-exp), known as the online-softmax correction factor
+    q=local_q,
+    k=local_k,
+    v=local_v,
+    key=magi_attn_runtime_key,
+  )
 
-# Do local attention computation with runtime key
-local_out, _ = calc_attn(local_q, local_k, local_v, magi_attn_runtime_key) # local out with shape (s, h)
+  # --- Undispatch the output tensor along seqlen dim from multiple ranks and unpad --- #
 
-# Gather local attention results and unpad to global result with runtime key
-total_out = undispatch(local_out, magi_attn_runtime_key)   # total out with shape (totoal_seqlen_q, h)
-```
+  # NOTE: the undispatch API may not be used until the moment you need the seqlen dimension to be compelete and ordered,
+  # e.g. for either aforementioned sample-wise operations, or loss computation
+  total_out = undispatch(
+    x=local_out,
+    key=magi_attn_runtime_key,
+  )
+
+  # --- Clear up distributed environment --- #
+
+  clearup_dist_env()
+  ```
 
 </details>
 
