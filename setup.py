@@ -599,13 +599,14 @@ if not SKIP_CUDA_BUILD:
 
     ext_modules.append(
         CUDAExtension(
-            name="flexible_flash_attention_cuda",
+            name=f"flexible_flash_attention._C",
             sources=sources,
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"] + feature_args,
+                "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"] + feature_args,
                 "nvcc": nvcc_threads_args() + nvcc_flags + cc_flag + feature_args,
             },
             include_dirs=include_dirs,
+            py_limited_api=True,
         )
     )
 
@@ -641,4 +642,5 @@ setup(
         "packaging",
         "ninja",
     ],
+    options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )

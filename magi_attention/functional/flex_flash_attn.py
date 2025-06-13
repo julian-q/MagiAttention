@@ -18,10 +18,11 @@ import torch
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
-import flexible_flash_attention_cuda
+import flexible_flash_attention._C
 
 # isort: on
 
+flexible_flash_attention_cuda = torch.ops.flexible_flash_attention
 
 def maybe_contiguous(x):
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x
