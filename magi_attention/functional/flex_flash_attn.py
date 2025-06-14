@@ -561,9 +561,8 @@ def _bwd(
     # https://github.com/Dao-AILab/flash-attention/blob/db4baba2cae7be5a9155304636ba50a571c680a6/hopper/flash_api.cpp#L1300
     head_size = q.size(-1)
     head_size = round_up_headdim(head_size)
-    # props = torch.cuda.get_device_properties()
-    # arch = props.major * 10 + props.minor
-    arch = 90
+    props = torch.cuda.get_device_properties()
+    arch = props.major * 10 + props.minor
     is_local = (window_size_left >= 0 or window_size_right >= 0) and not is_causal
     kBlockM = get_kBlockM(arch, head_size, is_causal, softcap, is_local)
     seqlen_q_rounded = round_multiple(max_seqlen_q, kBlockM)
