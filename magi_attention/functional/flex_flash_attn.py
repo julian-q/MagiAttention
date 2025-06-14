@@ -63,6 +63,10 @@ def _flex_flash_attn_forward(
             None,  # k_new, v_new
             None,
             None,  # qv
+            # NOTE(julian-q): out should be None because we removed
+            # the (out!) alias from the return signature to support 
+            # fullgraph.
+            # https://github.com/Dao-AILab/flash-attention/blob/db4baba2cae7be5a9155304636ba50a571c680a6/hopper/flash_api.cpp#L1628
             None,  # out
             q_ranges,
             k_ranges,
@@ -95,7 +99,7 @@ def _flex_flash_attn_forward(
             sm_margin,
             disable_fwd_atomic_reduction,
         )
-
+    
     if disable_fwd_atomic_reduction:
         out = out
     else:
@@ -154,6 +158,10 @@ def _flex_flash_attn_backward(
             v,
             out,
             softmax_lse,
+            # NOTE(julian-q): dq, dk, dv should be None because we removed
+            # the (dq!), (dk!), (dv!) aliases from the return signature
+            # to support fullgraph.
+            # https://github.com/Dao-AILab/flash-attention/blob/db4baba2cae7be5a9155304636ba50a571c680a6/hopper/flash_api.cpp#L1651
             None,
             None,
             None,  # dq, dk, dv
@@ -423,3 +431,148 @@ def flex_flash_attn_func(
         return_dtype,
         disable_fwd_atomic_reduction,
     )
+
+@torch.library.register_fake("flexible_flash_attention::fwd")
+def _fwd(
+    q,
+    k,
+    v,
+    k_new = None,
+    v_new = None,
+    qv = None,
+    out = None,
+    q_ranges = None,
+    k_ranges = None,
+    cu_seqlens_q = None,
+    cu_seqlens_k = None,
+    cu_seqlens_k_new = None,
+    seqused_q = None,
+    seqused_k = None,
+    max_seqlen_q = None,
+    max_seqlen_k = None,
+    attn_type_map = None,
+    page_table = None,
+    kv_batch_idx = None,
+    leftpad_k = None,
+    rotary_cos = None,
+    rotary_sin = None,
+    seqlens_rotary = None,
+    q_descale = None,
+    k_descale = None,
+    v_descale = None,
+    softmax_scale = None,
+    causal = False,
+    window_size_left = -1,
+    window_size_right = -1,
+    softcap = 0.0,
+    rotary_interleaved = False,
+    scheduler_metadata = None,
+    num_splits = 0,
+    pack_gqa = None,
+    sm_margin = 0,
+    disable_fwd_atomic_reduction = False,
+):
+    torch._check(q.shape[1:] == k.shape[1:])
+    torch._check(q.shape[1:] == v.shape[1:])
+    torch._check(q.dtype == k.dtype)
+    torch._check(q.dtype == v.dtype)
+
+    out = torch.empty_like(q)
+    out_accum = torch.empty_like(q)
+    softmax_lse = torch.empty(q.shape[1], q.shape[0])
+
+    return out, out_accum, softmax_lse
+
+def round_up_headdim(head_size: int) -> int:
+    if head_size <= 64:
+        return 64
+    if head_size <= 96:
+        return 96
+    if head_size <= 128:
+        return 128
+    if head_size <= 192:
+        return 192
+    return 256
+
+def get_kBlockM(arch: int, head_size: int, is_causal: bool, softcap: float, is_local: bool) -> int:
+    if arch >= 90:
+        if head_size <= 64:
+            if is_causal and softcap > 0.0:
+                return 96
+            else:
+                return 128
+        elif head_size <= 96:
+            return 64
+        elif head_size <= 128:
+            if is_causal or is_local or softcap > 0.0:
+                return 64
+            else:
+                return 80
+        else:
+            return 64
+    elif arch == 86 or arch == 89:
+        if head_size <= 192:
+            return 64
+        else:
+            return 32
+    else:
+        if head_size <= 64:
+            return 128
+        else:
+            return 64
+
+def round_multiple(x: int, m: int) -> int:
+    return (x + m - 1) // m * m
+
+@torch.library.register_fake("flexible_flash_attention::bwd")
+def _bwd(
+    dout,
+    q,
+    k,
+    v,
+    out,
+    softmax_lse,
+    dq = None,
+    dk = None,
+    dv = None,
+    q_ranges = None,
+    k_ranges = None,
+    cu_seqlens_q = None,
+    cu_seqlens_k = None,
+    seqused_q = None,
+    seqused_k = None,
+    max_seqlen_q = None,
+    max_seqlen_k = None,
+    attn_type_map = None,
+    softmax_scale = None,
+    is_causal = False,
+    window_size_left = -1,
+    window_size_right = -1,
+    softcap = 0.0,
+    deterministic = False,
+    sm_margin = 0,
+):
+    # NOTE(julian-q): This logic from flash_api.cpp:
+    # https://github.com/Dao-AILab/flash-attention/blob/db4baba2cae7be5a9155304636ba50a571c680a6/hopper/flash_api.cpp#L1300
+    head_size = q.size(-1)
+    head_size = round_up_headdim(head_size)
+    props = torch.cuda.get_device_properties()
+    arch = props.major * 10 + props.minor
+    is_local = (window_size_left >= 0 or window_size_right >= 0) and not is_causal
+    kBlockM = get_kBlockM(arch, head_size, is_causal, softcap, is_local)
+    seqlen_q_rounded = round_multiple(max_seqlen_q, kBlockM)
+
+    dq = torch.empty_like(q)
+    dk = torch.empty_like(k)
+    dv = torch.empty_like(v)
+
+    batch_size = q_ranges.size(0)
+    num_heads = q.size(-2)
+    softmax_d = torch.empty(batch_size, num_heads, seqlen_q_rounded, dtype=torch.float32)
+    softmax_lse_log2 = torch.empty(batch_size, num_heads, seqlen_q_rounded, dtype=torch.float32)
+
+    dq_accum = torch.empty_like(q)
+    dk_accum = torch.empty_like(k)
+    dv_accum = torch.empty_like(v)
+
+    return dq, dk, dv, softmax_d, softmax_lse_log2, dq_accum, dk_accum, dv_accum
