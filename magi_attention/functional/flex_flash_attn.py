@@ -15,6 +15,7 @@
 from typing import Optional
 
 import torch
+from torch._subclasses.fake_tensor import FakeTensor
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
@@ -25,7 +26,11 @@ import flexible_flash_attention._C
 flexible_flash_attention_cuda = torch.ops.flexible_flash_attention
 
 def maybe_contiguous(x):
-    return x.contiguous() if x is not None and x.stride(-1) != 1 else x
+    if x is None:
+        return x
+    if isinstance(x, FakeTensor):
+        return x.contiguous()      # don’t peek at .stride()
+    return x if x.stride(-1) == 1 else x.contiguous()
 
 
 def _flex_flash_attn_forward(
@@ -556,8 +561,9 @@ def _bwd(
     # https://github.com/Dao-AILab/flash-attention/blob/db4baba2cae7be5a9155304636ba50a571c680a6/hopper/flash_api.cpp#L1300
     head_size = q.size(-1)
     head_size = round_up_headdim(head_size)
-    props = torch.cuda.get_device_properties()
-    arch = props.major * 10 + props.minor
+    # props = torch.cuda.get_device_properties()
+    # arch = props.major * 10 + props.minor
+    arch = 90
     is_local = (window_size_left >= 0 or window_size_right >= 0) and not is_causal
     kBlockM = get_kBlockM(arch, head_size, is_causal, softcap, is_local)
     seqlen_q_rounded = round_multiple(max_seqlen_q, kBlockM)
